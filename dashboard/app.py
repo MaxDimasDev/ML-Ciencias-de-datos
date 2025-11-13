@@ -501,6 +501,11 @@ with tab_form:
 
 with tab_metrics:
     st.subheader("Métricas del modelo y gráficas")
+    # Botón para refrescar y limpiar caché (evita esperar TTL)
+    if st.button("Actualizar métricas", help="Limpia caché y vuelve a consultar la API"):
+        st.cache_data.clear()
+        st.rerun()
+
     data = get_metrics(limit=10)
     if "error" in data:
         st.warning("No se pudieron obtener métricas de la API. Mostrando UI.")
@@ -511,6 +516,11 @@ with tab_metrics:
         else:
             latest = history[0]
             m = latest.get("metrics", {})
+
+            # Mostrar versión actual y conteo de versiones disponibles
+            lm = get_latest_model()
+            if "error" not in lm:
+                st.caption(f"Versión actual: {lm.get('version')} · Modelos guardados: {len(history)}")
 
             st.markdown("##### Resumen rápido")
             c1, c2, c3, c4, c5 = st.columns(5)
