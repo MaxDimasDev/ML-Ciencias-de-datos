@@ -11,3 +11,13 @@ services:
         sync: false
       - key: PYTHON_VERSION
         value: 3.11.10
+      - key: TRAINING_SOURCE_URL
+        sync: false
+      - key: TRAINING_SQL
+        sync: false
+      - key: AUTO_RETRAIN_AFTER_PREDICTION
+        value: "true"
+      - key: AUTO_RETRAIN
+        value: "false"
+      - key: RETRAIN_MIN_FEEDBACK
+        value: "1"
