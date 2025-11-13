@@ -129,9 +129,17 @@ def predict(req: PredictRequest, background_tasks: BackgroundTasks, db: Session 
         model=mv,
     )
 
+    # Guardar ejemplo etiquetado automáticamente con el resultado de la predicción
+    try:
+        crud.add_labeled_example(db, features=req.features, y=int(pred))
+        print("[auto-retrain] Ejemplo etiquetado agregado desde predicción")
+    except Exception as e:
+        print(f"[auto-retrain] No se pudo agregar ejemplo etiquetado: {e}")
+
     # Disparar reentrenamiento en background si está habilitado
     if AUTO_RETRAIN_AFTER_PREDICTION:
         try:
+            print("[auto-retrain] Programando reentrenado en background tras predicción...")
             background_tasks.add_task(_retrain_from_feedback_background)
         except Exception:
             pass
@@ -157,10 +165,15 @@ def _labeled_examples_to_df(examples: list[Dict[str, Any]]) -> pd.DataFrame:
 
 
 def _retrain_from_feedback_background():
+    print("[auto-retrain] Inicio de reentrenado en background")
     db = SessionLocal()
     try:
         # Reentrenar a partir del dataset minado + ejemplos etiquetados (si existen)
-        base_df = collect_training_data()
+        try:
+            base_df = collect_training_data()
+        except Exception as e:
+            print(f"[auto-retrain] Error al minar datos de entrenamiento: {e}")
+            raise
         # Fetch labeled examples and transform to DataFrame
         labeled = crud.get_all_labeled_examples(db)
         labeled_dicts = [{"features": r.features, "y": r.y} for r in labeled]
@@ -169,8 +182,10 @@ def _retrain_from_feedback_background():
         pipe, metrics, _schema = train_and_evaluate(base_df, additional_df=add_df if not add_df.empty else None)
         version = crud.next_version(db)
         artifact = dump_artifact(pipe)
-        crud.create_model_version(db, version=version, artifact=artifact, metrics=metrics)
+        mv = crud.create_model_version(db, version=version, artifact=artifact, metrics=metrics)
+        print(f"[auto-retrain] Nueva versión creada: {mv.version}")
     finally:
+        print("[auto-retrain] Fin de reentrenado en background")
         db.close()
 
 

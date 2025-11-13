@@ -372,6 +372,16 @@ with tab_chat:
         content = m.get("content", "")
         with st.chat_message(role):
             st.markdown(content)
+            # Mostrar detalles técnicos si existen
+            meta = m.get("meta")
+            if role == "assistant" and meta:
+                with st.expander("Ver más"):
+                    st.markdown("**Endpoint**")
+                    st.code(meta.get("endpoint", ""))
+                    st.markdown("**JSON enviado**")
+                    st.json(meta.get("request", {}))
+                    st.markdown("**Respuesta de la API**")
+                    st.json(meta.get("response", {}))
 
     # Input fijo al fondo del viewport, centrado por CSS
     user_input = st.chat_input("Escribe tu mensaje…")
@@ -401,7 +411,12 @@ with tab_chat:
             if 0.45 <= prob <= 0.55:
                 reply += " Nota: la probabilidad está cerca del 50%, la confianza es moderada."
 
-        st.session_state.messages.append({"role": "assistant", "content": reply})
+        meta = {
+            "endpoint": f"{API_BASE}/predict",
+            "request": {"features": feats},
+            "response": resp or {},
+        }
+        st.session_state.messages.append({"role": "assistant", "content": reply, "meta": meta})
         st.rerun()
 
     # Feedback y reentrenamiento removidos de la UI para simplificar la experiencia
@@ -495,6 +510,15 @@ with tab_form:
             else:
                 st.info(f"Es más probable que NO contrates (≈ {prob:.0%}).")
             st.caption(f"Modelo: {resp.get('model_version')} · Fecha: {str(resp.get('timestamp'))}")
+
+            # Detalles técnicos
+            with st.expander("Ver más"):
+                st.markdown("**Endpoint**")
+                st.code(f"{API_BASE}/predict")
+                st.markdown("**JSON enviado**")
+                st.json({"features": features})
+                st.markdown("**Respuesta de la API**")
+                st.json(resp)
 
     # Fin formulario
 
