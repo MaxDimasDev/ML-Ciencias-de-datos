@@ -6,6 +6,9 @@ Este proyecto implementa un sistema completo de ML para predecir si un cliente c
 - Modelo de Regresión Logística con `scikit-learn`, pipeline y métricas almacenadas.
 - Base de datos PostgreSQL para predicciones, métricas y versiones del modelo.
 - Dashboard web en Streamlit para ingresar datos (Formulario en español), modo Chat asistente y ver métricas.
+ - Auto-reentrenamiento en background tras cada predicción (configurable) y versionado (`v1`, `v2`, ...).
+ - En Chat y Formulario se incluye un panel "Ver más" con el endpoint usado, el JSON enviado y la respuesta recibida.
+ - Botón "Actualizar métricas" en la pestaña Métricas para refrescar cache y mostrar la última versión.
 - Listo para despliegue gratuito: API en Render, BD en Neon, Dashboard en Streamlit Community Cloud.
 
 ## Estructura
@@ -36,8 +39,8 @@ Este proyecto implementa un sistema completo de ML para predecir si un cliente c
 - Crea un archivo `.env` (no se versiona) a partir de `.env.example` y define al menos:
   - `DATABASE_URL` → cadena de conexión Postgres (por ejemplo, Neon) con `sslmode=require`.
   - `TRAINING_SQL` (opcional) → consulta SQL a ejecutar sobre `DATABASE_URL` que devuelva columnas de features y `y`.
-  - `TRAINING_SOURCE_URL` (opcional) → URL que entregue CSV o JSON con columnas de features y `y`.
-  - `AUTO_RETRAIN_AFTER_PREDICTION` (default: `true`) → reentrena en background después de cada predicción usando el dataset minado.
+  - `TRAINING_SOURCE_URL` (opcional) → URL o ruta local (p. ej. `C:\\Users\\<usuario>\\proyecto\\bank-full.json` o `file:///C:/ruta/archivo.csv`) que entregue CSV o JSON con columnas de features y `y`.
+  - `AUTO_RETRAIN_AFTER_PREDICTION` (default: `true`) → reentrena en background después de cada predicción usando el dataset minado y ejemplos etiquetados.
   - `AUTO_RETRAIN` (default: `false`) y `RETRAIN_MIN_FEEDBACK` → reentrenamiento basado en ejemplos etiquetados vía `/feedback`.
   - `API_BASE_URL` (para el dashboard, si no usas localhost).
 - Debes configurar `TRAINING_SQL` o `TRAINING_SOURCE_URL` para que el entrenamiento inicial funcione (no se descarga dataset).
@@ -102,9 +105,9 @@ streamlit run dashboard/app.py
 
 ## Flujo del Sistema
 
-1) Entrenamiento inicial (minado de datos): al iniciar la API, ejecuta la consulta SQL o la URL que definas y obtiene un dataset con columnas de entrada y la etiqueta `y`. Luego limpia (descarta `duration`) y entrena una Regresión Logística con pipeline (`OneHotEncoder` + `StandardScaler`). Calcula métricas y almacena una versión `vN` del modelo en la BD (incluye artifact binario y métricas en JSON).
+1) Entrenamiento inicial (minado de datos): al iniciar la API, ejecuta la consulta SQL o la URL/ruta que definas y obtiene un dataset con columnas de entrada y la etiqueta `y`. El minado normaliza algunos campos (p. ej. sí/no, meses abreviados, categorías en español) y el pipeline de ML descarta `duration` (leakage) y normaliza `y`. Se entrena una Regresión Logística con `OneHotEncoder(handle_unknown="ignore")` + `StandardScaler` y se almacenan métricas y la versión `vN` del modelo (artifact binario + métricas JSON).
 
-2) Predicción (dashboard → API): el usuario ingresa datos, el dashboard envía JSON a la API, la API carga el modelo más reciente, predice, devuelve probabilidad y guarda el registro en la tabla `predictions` con timestamp y versión.
+2) Predicción (dashboard → API): el usuario ingresa datos, el dashboard envía JSON a la API (`POST /predict`). La API carga el modelo más reciente, predice, devuelve probabilidad y guarda el registro en la tabla `predictions` con timestamp y versión. Adicionalmente, guarda un ejemplo etiquetado con `y=pred` y, si `AUTO_RETRAIN_AFTER_PREDICTION=true`, programa un reentrenado en background que crea una nueva versión si hay cambios.
 
 3) Interacción: desde el dashboard puedes usar el modo Chat (texto libre) o el Formulario (campos en español con ayudas) para consultar una probabilidad de contratación clara (SÍ/NO + porcentaje). No se muestra “predicción 0/1”.
 
@@ -114,20 +117,31 @@ streamlit run dashboard/app.py
 - `GET /model/latest` → versión y métricas del modelo de producción
 - `POST /predict` → body `{ "features": { ... } }` → probabilidad, predicción, timestamp, versión
 - `GET /metrics?limit=5` → historial de métricas por versión
-  (Reentrenamiento y feedback deshabilitados en esta versión del dashboard)
+ - `POST /feedback` → guarda ejemplo etiquetado `{features, y}` para reentrenos manuales
+ - `POST /retrain` → reentrena a partir del dataset base y CSV opcional (con `y`)
 
 ## Dashboard: Chat, Formulario y Métricas
 
 - Accuracy, Precision, Recall, F1, ROC-AUC, (PR-AUC), Matriz de confusión
 - Curva ROC, Curva Precision-Recall, Distribución de `y`
 - Tendencia histórica por versión (líneas)
-- Pestaña "Chat": escribe en lenguaje natural (p. ej., "Tengo 45 años, saldo 1200, hipoteca sí"). El asistente responde en lenguaje claro: “Es probable que SÍ/NO contrates (≈ 78%)”.
-- Pestaña "Formulario": campos en español con instrucciones (“Ingresa tu edad”, “¿Tienes hipoteca?”). Los parámetros avanzados están ocultos en un panel opcional.
+- Pestaña "Chat": escribe en lenguaje natural (p. ej., "Tengo 45 años, saldo 1200, hipoteca sí"). El asistente responde en lenguaje claro: “Es probable que SÍ/NO contrates (≈ 78%)”. Incluye un panel "Ver más" con el endpoint, el JSON enviado y la respuesta.
+- Pestaña "Formulario": campos en español con instrucciones (“Ingresa tu edad”, “¿Tienes hipoteca?”). Los parámetros avanzados están ocultos en un panel opcional. Incluye un panel "Ver más" con el endpoint, el JSON y la respuesta.
+- Pestaña "Métricas": botón "Actualizar métricas" para refrescar cache y ver la última versión creada.
 
 ## Notas
 
 - La API por defecto permite CORS `*` para facilidad de demo.
 - El pipeline maneja categorías desconocidas y realiza escalado en numéricos.
+ - El auto-reentrenamiento tras predicción usa la propia predicción como etiqueta (`y=pred`) para bootstrap de versiones; en entornos reales se recomienda usar etiquetas humanas vía `/feedback` para evitar sesgos de auto-entrenamiento.
+
+## Diferencias vs documentación previa (DataSet.pdf)
+
+- Enfoque: la documentación anterior describe “minería de texto (PLN)”. El proyecto actual trabaja con datos tabulares del dataset Bank Marketing (UCI) y no realiza PLN.
+- Visualización: antes se mencionaba un dashboard con Plotly/Dash. Ahora se utiliza Streamlit con pestañas de Chat, Formulario y Métricas.
+- Preparación de datos: la doc previa usa `pd.get_dummies` y `MinMaxScaler` (0-1). El proyecto actual usa `OneHotEncoder(handle_unknown="ignore")` y `StandardScaler`.
+- Persistencia de dataset procesado: la doc previa guardaba `bank-full-minado.csv`. En el proyecto actual el minado es dinámico desde `TRAINING_SQL` o `TRAINING_SOURCE_URL` (CSV/JSON/archivo local) y no se persiste un dataset procesado.
+- Retraining: la doc previa no contemplaba reentrenamiento continuo. El proyecto actual puede reentrenar tras cada predicción (`AUTO_RETRAIN_AFTER_PREDICTION`) y también soporta feedback manual (`/feedback`).
 
 ## Licencia
 

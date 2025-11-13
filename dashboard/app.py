@@ -576,21 +576,39 @@ with tab_metrics:
                 draw_y_dist(m.get("y_distribution", {"0":0, "1":0}))
                 st.caption("Objetivo (y): 0 = No, 1 = Sí")
 
-            # Tendencia histórica por versión (mostrar solo si hay 2+ versiones)
-            if len(history) >= 2:
-                st.markdown("#### Tendencia histórica por versión")
-                hist_df = pd.DataFrame([
-                    {
-                        "version": h.get("version"),
-                        "created_at": h.get("created_at"),
-                        **{k: h.get("metrics", {}).get(k) for k in ["accuracy","precision","recall","f1","roc_auc"]},
-                    }
-                    for h in history
-                ])
-                if not hist_df.empty:
-                    st.line_chart(hist_df.set_index("version")[ ["accuracy","precision","recall","f1","roc_auc"] ])
+            # Historial de reentrenamiento: tabla y gráficas
+            st.markdown("#### Tabla histórica")
+            hist_rows = []
+            for h in history:
+                m_h = h.get("metrics", {})
+                cm = m_h.get("confusion_matrix", [[0, 0], [0, 0]])
+                # Representación compacta de la matriz de confusión
+                cm_str = f"{cm[0][0]},{cm[0][1]} · {cm[1][0]},{cm[1][1]}"
+                hist_rows.append({
+                    "timestamp": h.get("created_at"),
+                    "modelo": "Regresión Logística",
+                    "version": h.get("version"),
+                    "accuracy": m_h.get("accuracy"),
+                    "precision": m_h.get("precision"),
+                    "recall": m_h.get("recall"),
+                    "f1": m_h.get("f1"),
+                    "matriz_confusion": cm_str,
+                })
+            hist_df = pd.DataFrame(hist_rows)
+            if hist_df.empty:
+                st.info("Aún no hay historial. Envía una predicción y pulsa ‘Actualizar métricas’.")
             else:
-                st.info("La tendencia histórica aparece cuando existen al menos dos versiones (v1, v2, …).")
+                st.dataframe(hist_df, use_container_width=True)
+
+                st.markdown("#### Progreso por reentrenado")
+                # Gráfica temporal (por timestamp) y alternativa por versión
+                time_df = hist_df[["timestamp", "accuracy", "precision", "recall", "f1"]].copy()
+                time_df = time_df.set_index("timestamp")
+                try:
+                    st.line_chart(time_df)
+                except Exception:
+                    # Si algún backend devuelve timestamp no parseable, caer a índice por versión
+                    st.line_chart(hist_df.set_index("version")[ ["accuracy","precision","recall","f1"] ])
 
 
 ## Pestaña de reentrenamiento eliminada para simplificar la interfaz
