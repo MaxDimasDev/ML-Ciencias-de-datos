@@ -325,9 +325,10 @@ with tab_home:
     st.subheader("Guía rápida")
     st.markdown(
         """
-        - Chat: escribe en lenguaje natural (por ejemplo: "Tengo 36 años, saldo 600, hipoteca sí, casado"). Te responderé con “SÍ/NO” y un porcentaje.
-        - Formulario: completa los campos en español. Los parámetros avanzados están en un panel opcional.
-        - Métricas: ve el rendimiento del modelo (Exactitud, Precisión, Recall, F1, ROC-AUC) y gráficas interpretables.
+        - Chat: escribe en lenguaje natural (por ejemplo: "Tengo 36 años, saldo 600, hipoteca sí, casado"). Respondo con “SÍ/NO” y un porcentaje.
+        - Formulario: completa los campos en español. Puedes abrir el panel de parámetros avanzados si lo necesitas.
+        - Métricas: consulta rendimiento (Exactitud, Precisión, Recall, F1, ROC-AUC), gráficas y el historial de versiones.
+        - Reentrenado: si está activo, tras cada predicción se crea una nueva versión; usa “Actualizar métricas” para ver cambios.
         """
     )
 
@@ -337,6 +338,11 @@ with tab_home:
         - "Tengo 45 años, saldo 1200, hipoteca sí, casado, contacto celular. ¿Qué probabilidad tengo?"
         - "Soy soltero, 29 años, saldo 0, sin préstamos. ¿Me verías contratando?"
         - "Trabajo en management, 50 años, hipoteca sí, préstamo no. ¿Sería un sí o no?"
+        - "Cliente 36 años, estudios universitarios, saldo 600, sin hipoteca, campaña anterior 2, mes jun. ¿Sí o no?"
+        - "Estado civil: casado, profesión: services, contacto: telefónico, días desde último contacto 999. ¿Qué estimas?"
+        - "Tengo 58 años, préstamo personal sí, hipoteca no, saldo 150. ¿Cuál es la probabilidad?"
+        - "Profesión blue-collar, educación secundaria, 40 años, contacto celular, mes may, día 5. ¿Me aceptarías?"
+        - "Soy admin, 35 años, sin préstamos, sin hipoteca, saldo 3000, campaña actual 1. ¿Resultado?"
         """
     )
     st.info("Tip: puedes dar pocos datos y el sistema completa faltantes de forma segura.")
@@ -568,6 +574,14 @@ with tab_metrics:
                     "- ROC-AUC: capacidad del modelo para separar Sí/No (más alto es mejor)."
                 )
 
+            with st.expander("¿Cómo interpretar las gráficas?"):
+                st.markdown(
+                    "- Matriz de confusión: muestra aciertos y errores por clase (TN, FP, FN, TP).\n"
+                    "- Curva ROC: relación TPR vs FPR; la diagonal es azar, cuanto más arriba/mejor.\n"
+                    "- Curva Precisión-Recall: útil con clases desbalanceadas; observa el área (PR-AUC).\n"
+                    "- Distribución de y: balance de clases (0=No, 1=Sí); fuerte desequilibrio puede afectar métricas."
+                )
+
             st.markdown("---")
             # Gráficas
             gc1, gc2, gc3, gc4 = st.columns(4)
@@ -582,6 +596,12 @@ with tab_metrics:
                 st.caption("Objetivo (y): 0 = No, 1 = Sí")
 
             # Historial de reentrenamiento: tabla y gráficas
+            with st.expander("¿Qué muestra el historial por versión?"):
+                st.markdown(
+                    "- Tabla histórica: cada fila corresponde a una versión entrenada con su timestamp.\n"
+                    "- Incluye Accuracy/Precision/Recall/F1 y la matriz de confusión compacta.\n"
+                    "- Úsalo para comparar rendimientos entre modelos y detectar regresiones."
+                )
             st.markdown("#### Tabla histórica")
             hist_rows = []
             for h in history:
@@ -605,6 +625,13 @@ with tab_metrics:
             else:
                 st.dataframe(hist_df, use_container_width=True)
 
+                with st.expander("¿Cómo leer el progreso por reentrenado?"):
+                    st.markdown(
+                        "- La línea temporal muestra cómo cambian Accuracy/Precision/Recall/F1 con cada versión.\n"
+                        "- Si el timestamp no es parseable, se usa el índice por versión como alternativa.\n"
+                        "- Un aumento sostenido sugiere mejora del modelo; caídas indican revisar datos o parámetros.\n"
+                        "- Pulsa ‘Actualizar métricas’ tras nuevas predicciones si el reentrenado está activo."
+                    )
                 st.markdown("#### Progreso por reentrenado")
                 # Gráfica temporal (por timestamp) y alternativa por versión
                 time_df = hist_df[["timestamp", "accuracy", "precision", "recall", "f1"]].copy()
