@@ -22,6 +22,11 @@ st.markdown(
       .bubble.user { border-color:#1f6feb; background:rgba(31,111,235,0.12); }
       .section-title { margin: 0 0 0.5rem 0; }
       .muted { color:#6b7280; font-size:0.9rem; }
+      /* Chat layout */
+      .chat-wrapper { display:flex; flex-direction:column; height: 70vh; gap: 8px; }
+      #chat-scroll { flex: 1 1 auto; overflow-y: auto; padding: 6px; }
+      .chat-input-area { position: sticky; bottom: 0; padding-top: 6px; }
+      .chat-form { max-width: 720px; margin: 0 auto; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -274,8 +279,8 @@ with tab_chat:
             st.session_state.pop("last_features", None)
             st.rerun()
 
-    # Contenedor visual para el área de conversación
-    st.markdown("<div class='app-card'>", unsafe_allow_html=True)
+    # Contenedor visual con alto fijo y scroll interno
+    st.markdown("<div class='app-card chat-wrapper'>", unsafe_allow_html=True)
 
     if "messages" not in st.session_state:
         st.session_state.messages = [
@@ -283,6 +288,7 @@ with tab_chat:
         ]
 
     # Render mensajes con burbujas alineadas (asistente izquierda, usuario derecha)
+    st.markdown("<div id='chat-scroll'>", unsafe_allow_html=True)
     for m in st.session_state.messages:
         role = m.get("role", "assistant")
         content = m.get("content", "")
@@ -294,14 +300,19 @@ with tab_chat:
             c1, c2 = st.columns([0.65, 0.35])
             with c1:
                 st.markdown(f"<div class='bubble assistant'>{content}</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    user_input = st.chat_input("Escribe tu mensaje…")
-    if user_input:
+    # Input fijo abajo y centrado
+    st.markdown("<div class='chat-input-area'>", unsafe_allow_html=True)
+    with st.form("chat_form", clear_on_submit=True):
+        _cl, _cc, _cr = st.columns([0.2, 0.6, 0.2])
+        with _cc:
+            user_input = st.text_input("Escribe tu mensaje…", max_chars=400, label_visibility="collapsed")
+            send = st.form_submit_button("Enviar", use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if send and user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
-        # Mostrar prompt del usuario (derecha)
-        c1, c2 = st.columns([0.35, 0.65])
-        with c2:
-            st.markdown(f"<div class='bubble user'>{user_input}</div>", unsafe_allow_html=True)
 
         # Parsear a features y predecir
         feats = parse_text_to_features(user_input)
@@ -315,7 +326,6 @@ with tab_chat:
         else:
             prob = float(resp.get("probability", 0.0))
             pred = int(resp.get("predicted", 0))
-            # Resumen de features detectadas
             if feats:
                 det = ", ".join([f"{k}={v}" for k, v in feats.items()])
                 intro = f"Con lo que mencionaste ({det})"
@@ -327,10 +337,6 @@ with tab_chat:
             if 0.45 <= prob <= 0.55:
                 reply += " Nota: la probabilidad está cerca del 50%, la confianza es moderada."
 
-        # Mostrar respuesta del asistente (izquierda)
-        c1, c2 = st.columns([0.65, 0.35])
-        with c1:
-            st.markdown(f"<div class='bubble assistant'>{reply}</div>", unsafe_allow_html=True)
         st.session_state.messages.append({"role": "assistant", "content": reply})
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -350,40 +356,19 @@ with tab_form:
     # Básicos en español
     with col1:
         age = st.number_input("Edad", min_value=18, max_value=100, value=35, help="Ingresa tu edad en años")
-        job = st.selectbox(
-            "Ocupación",
-            [
-                "admin.", "blue-collar", "entrepreneur", "housemaid", "management", "retired",
-                "self-employed", "services", "student", "technician", "unemployed", "unknown",
-            ],
-            index=0,
-            help="Selecciona la categoría que mejor te describa",
-        )
-        marital = st.selectbox(
-            "Estado civil",
-            ["single", "married", "divorced", "unknown"],
-            index=1,
-            help="Elige tu estado civil",
-        )
-        education = st.selectbox(
-            "Nivel educativo",
-            [
-                "basic.4y", "basic.6y", "basic.9y", "high.school", "illiterate",
-                "professional.course", "university.degree", "unknown",
-            ],
-            index=6,
-            help="Selecciona tu nivel de estudios",
-        )
-        default = st.selectbox("¿En mora (default)?", ["no", "yes", "unknown"], index=0, help="Si alguna vez estuviste en incumplimiento")
+        job_es = st.selectbox("Ocupación", list(JOB_ES_TO_EN.keys()), index=0, help="Selecciona la categoría que mejor te describa")
+        marital_es = st.selectbox("Estado civil", list(MARITAL_ES_TO_EN.keys()), index=1, help="Elige tu estado civil")
+        education_es = st.selectbox("Nivel educativo", list(EDU_ES_TO_EN.keys()), index=6, help="Selecciona tu nivel de estudios")
+        default_es = st.selectbox("¿En mora (default)?", list(YES_NO_UNK_ES_TO_EN.keys()), index=1, help="Si alguna vez estuviste en incumplimiento")
         balance = st.number_input("Saldo en cuenta", value=0, step=100, help="Saldo promedio en tu cuenta (puede ser negativo)")
-        housing = st.selectbox("¿Tienes hipoteca?", ["no", "yes", "unknown"], index=0)
+        housing_es = st.selectbox("¿Tienes hipoteca?", list(YES_NO_UNK_ES_TO_EN.keys()), index=1)
 
     with col2:
-        loan = st.selectbox("¿Tienes préstamo personal?", ["no", "yes", "unknown"], index=0)
-        contact = st.selectbox("Medio de contacto", ["cellular", "telephone"], index=0, help="El canal por el que te contactamos")
+        loan_es = st.selectbox("¿Tienes préstamo personal?", list(YES_NO_UNK_ES_TO_EN.keys()), index=1)
+        contact_es = st.selectbox("Medio de contacto", list(CONTACT_ES_TO_EN.keys()), index=0, help="El canal por el que te contactamos")
         day = st.number_input("Día del mes", min_value=1, max_value=31, value=15, help="Día del contacto")
-        month = st.selectbox("Mes", ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"], index=7)
-        day_of_week = st.selectbox("Día de la semana", ["mon","tue","wed","thu","fri"], index=2)
+        month_es = st.selectbox("Mes", ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"], index=7)
+        day_of_week_es = st.selectbox("Día de la semana", ["Lun","Mar","Mié","Jue","Vie"], index=2)
         campaign = st.number_input("Número de contactos (campaña)", min_value=1, max_value=60, value=1, help="Cuántas veces te hemos contactado en esta campaña")
 
     # Avanzados ocultos para no confundir
@@ -392,13 +377,25 @@ with tab_form:
         with c3a:
             pdays = st.number_input("Días desde contacto previo (pdays)", min_value=-1, max_value=999, value=999, help="-1 si no hay registro previo")
             previous = st.number_input("Contactos previos", min_value=0, max_value=100, value=0)
-            poutcome = st.selectbox("Resultado campaña previa", ["failure","nonexistent","success"], index=1)
+            poutcome_es = st.selectbox("Resultado campaña previa", ["Fracaso","Inexistente","Éxito"], index=1)
         with c3b:
             emp_var_rate = st.number_input("Tasa variación empleo (emp.var.rate)", value=1.1, format="%0.2f")
             cons_price_idx = st.number_input("Índice precios (cons.price.idx)", value=93.75, format="%0.2f")
             cons_conf_idx = st.number_input("Índice confianza (cons.conf.idx)", value=-40.0, format="%0.1f")
             euribor3m = st.number_input("Euribor 3m", value=4.0, format="%0.3f")
             nr_employed = st.number_input("Empleados (nr.employed)", value=5191.0, format="%0.1f")
+
+    # Mapear valores seleccionados en español a lo que espera el backend
+    job = JOB_ES_TO_EN[job_es]
+    marital = MARITAL_ES_TO_EN[marital_es]
+    education = EDU_ES_TO_EN[education_es]
+    default = YES_NO_UNK_ES_TO_EN[default_es]
+    housing = YES_NO_UNK_ES_TO_EN[housing_es]
+    loan = YES_NO_UNK_ES_TO_EN[loan_es]
+    contact = CONTACT_ES_TO_EN[contact_es]
+    month = MONTH_ES_TO_EN[month_es]
+    day_of_week = WDAY_ES_TO_EN[day_of_week_es]
+    poutcome = {"Fracaso": "failure", "Inexistente": "nonexistent", "Éxito": "success"}[poutcome_es]
 
     features = {
         "age": int(age),

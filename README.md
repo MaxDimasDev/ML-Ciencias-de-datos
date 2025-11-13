@@ -1,6 +1,6 @@
 # Sistema ML Completo: Regresión Logística (Bank Marketing)
 
-Este proyecto implementa un sistema completo de ML para predecir si un cliente contratará un producto bancario, usando el dataset Bank Marketing (UCI). Incluye:
+Este proyecto implementa un sistema completo de ML para predecir si un cliente contratará un producto bancario. En esta versión no se incluye dataset embebido: el modelo se entrena a partir de un paso de minado de datos configurable (SQL/HTTP). Incluye:
 
 - API REST con FastAPI para predicción y métricas.
 - Modelo de Regresión Logística con `scikit-learn`, pipeline y métricas almacenadas.
@@ -35,10 +35,10 @@ Este proyecto implementa un sistema completo de ML para predecir si un cliente c
 
 - Crea un archivo `.env` (no se versiona) a partir de `.env.example` y define al menos:
   - `DATABASE_URL` → cadena de conexión Postgres (por ejemplo, Neon) con `sslmode=require`.
-  - `BANK_DATASET_PATH` (opcional) → ruta a un CSV local; si se omite, la API descargará el dataset UCI automáticamente.
+  - `TRAINING_SQL` (opcional) → consulta SQL a ejecutar sobre `DATABASE_URL` que devuelva columnas de features y `y`.
+  - `TRAINING_SOURCE_URL` (opcional) → URL que entregue CSV o JSON con columnas de features y `y`.
   - `API_BASE_URL` (para el dashboard, si no usas localhost).
-- El Dashboard en Streamlit Community Cloud debe usar `Secrets` y definir `API_BASE_URL` ahí.
-- Los datasets locales `bank-full.csv` y `bank-additional-full.csv` están ignorados por `.gitignore` para evitar subirlos al repo.
+- Debes configurar `TRAINING_SQL` o `TRAINING_SOURCE_URL` para que el entrenamiento inicial funcione (no se descarga dataset).
 
 ## Correr Localmente
 
@@ -90,7 +90,7 @@ streamlit run dashboard/app.py
   - Añadir variable `DATABASE_URL` con la cadena de Neon
   - Alternativamente, Render detecta `render.yaml` en la raíz.
 
-> Nota: La API detecta automáticamente un CSV local (`BANK_DATASET_PATH` o `bank-full.csv`/`bank-additional-full.csv`) si existe en el proyecto. En producción (Render) es habitual no subir datasets; la API descargará el dataset UCI y entrenará al inicio.
+> Nota: Esta versión no descarga datasets. Debes proporcionar `TRAINING_SQL` o `TRAINING_SOURCE_URL` para que el entrenamiento inicial ocurra con tus datos.
 
 ### 3. Dashboard en Streamlit Community Cloud (gratis)
 - Ir a https://share.streamlit.io/
@@ -100,7 +100,7 @@ streamlit run dashboard/app.py
 
 ## Flujo del Sistema
 
-1) Entrenamiento inicial: al iniciar la API, descarga el dataset de UCI, limpia columnas (descarta `duration`) y entrena una Regresión Logística con pipeline (`OneHotEncoder` + `StandardScaler`). Calcula métricas y almacena una versión `vN` del modelo en la BD (incluye artifact binario y métricas en JSON).
+1) Entrenamiento inicial (minado de datos): al iniciar la API, ejecuta la consulta SQL o la URL que definas y obtiene un dataset con columnas de entrada y la etiqueta `y`. Luego limpia (descarta `duration`) y entrena una Regresión Logística con pipeline (`OneHotEncoder` + `StandardScaler`). Calcula métricas y almacena una versión `vN` del modelo en la BD (incluye artifact binario y métricas en JSON).
 
 2) Predicción (dashboard → API): el usuario ingresa datos, el dashboard envía JSON a la API, la API carga el modelo más reciente, predice, devuelve probabilidad y guarda el registro en la tabla `predictions` con timestamp y versión.
 

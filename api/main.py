@@ -18,6 +18,7 @@ from .ml import (
     dump_artifact,
     load_artifact,
 )
+from .data_mining import collect_training_data
 from .schemas import (
     PredictRequest,
     PredictResponse,
@@ -49,7 +50,8 @@ def on_startup():
     try:
         latest = crud.get_latest_model(db)
         if latest is None:
-            base_df = load_default_dataset()
+            # Minado de datos: construir dataset desde fuente externa (SQL/HTTP)
+            base_df = collect_training_data()
             pipe, metrics, _schema = train_and_evaluate(base_df)
             version = crud.next_version(db)
             artifact = dump_artifact(pipe)
@@ -148,7 +150,8 @@ def _labeled_examples_to_df(examples: list[Dict[str, Any]]) -> pd.DataFrame:
 def _retrain_from_feedback_background():
     db = SessionLocal()
     try:
-        base_df = load_default_dataset()
+        # Reentrenar a partir del dataset minado + ejemplos etiquetados (si existen)
+        base_df = collect_training_data()
         # Fetch labeled examples and transform to DataFrame
         labeled = crud.get_all_labeled_examples(db)
         labeled_dicts = [{"features": r.features, "y": r.y} for r in labeled]
