@@ -9,6 +9,24 @@ import seaborn as sns
 
 st.set_page_config(page_title="Asistente de Contratación Bancaria", layout="wide")
 
+# Estilos globales (ligero y oscuro) y componentes visuales
+st.markdown(
+    """
+    <style>
+      .app-card { border:1px solid #e5e7eb; border-radius:12px; padding:16px; background: rgba(127,127,127,0.04); margin: 10px 0 16px; }
+      @media (prefers-color-scheme: dark) {
+        .app-card { border-color:#30363d; background: rgba(255,255,255,0.05); }
+      }
+      .bubble { border-radius:14px; padding:10px 12px; border:1px solid; max-width:100%; }
+      .bubble.assistant { border-color:#94a3b8; background:rgba(148,163,184,0.15); }
+      .bubble.user { border-color:#1f6feb; background:rgba(31,111,235,0.12); }
+      .section-title { margin: 0 0 0.5rem 0; }
+      .muted { color:#6b7280; font-size:0.9rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 def get_api_base() -> str:
     # Prefer Streamlit secrets, fallback to env var, then localhost
@@ -220,58 +238,102 @@ def draw_y_dist(y_dist):
 
 
 st.title("Asistente de Contratación Bancaria")
-st.caption("Modelo de Regresión Logística + API FastAPI + BD PostgreSQL")
 
-# Pestañas: chat, formulario y métricas (reentrenamiento eliminado)
-tab_chat, tab_form, tab_metrics = st.tabs(["Chat", "Formulario", "Métricas"])
+# Pestañas: inicio (walkthrough), chat, formulario y métricas
+tab_home, tab_chat, tab_form, tab_metrics = st.tabs(["Inicio", "Chat", "Formulario", "Métricas"])
+
+with tab_home:
+    st.subheader("Guía rápida")
+    st.markdown('<div class="app-card">', unsafe_allow_html=True)
+    st.markdown("""
+    - Chat: escribe en lenguaje natural (por ejemplo: "Tengo 36 años, saldo 600, hipoteca sí, casado"). Te responderé con “SÍ/NO” y un porcentaje.
+    - Formulario: completa los campos en español. Los parámetros avanzados están en un panel opcional.
+    - Métricas: ve el rendimiento del modelo (Exactitud, Precisión, Recall, F1, ROC-AUC) y gráficas interpretables.
+    """)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("#### ¿Qué puedo preguntar en el Chat?")
+    st.markdown('<div class="app-card">', unsafe_allow_html=True)
+    st.markdown("""
+    - "Tengo 45 años, saldo 1200, hipoteca sí, casado, contacto celular. ¿Qué probabilidad tengo?"
+    - "Soy soltero, 29 años, saldo 0, sin préstamos. ¿Me verías contratando?"
+    - "Trabajo en management, 50 años, hipoteca sí, préstamo no. ¿Sería un sí o no?"
+    """)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.info("Tip: puedes dar pocos datos y el sistema completa faltantes de forma segura.")
 
 
 with tab_chat:
     st.subheader("Asistente tipo Chat")
-    st.caption("Escribe en lenguaje natural: 'Tengo 45 años, saldo 1200, hipoteca sí…' y te diré tu probabilidad de contratar.")
+    top_l, top_r = st.columns([0.7, 0.3])
+    with top_l:
+        st.markdown("<div class='muted'>Chatea en español y obtén una estimación clara.</div>", unsafe_allow_html=True)
+    with top_r:
+        if st.button("Limpiar chat", use_container_width=True):
+            st.session_state.pop("messages", None)
+            st.session_state.pop("last_features", None)
+            st.rerun()
+
+    # Contenedor visual para el área de conversación
+    st.markdown("<div class='app-card'>", unsafe_allow_html=True)
 
     if "messages" not in st.session_state:
         st.session_state.messages = [
             {"role": "assistant", "content": "Hola, cuéntame algunos datos (edad, saldo, hipoteca sí/no, estado civil…) y estimo tu probabilidad."}
         ]
 
+    # Render mensajes con burbujas alineadas (asistente izquierda, usuario derecha)
     for m in st.session_state.messages:
-        with st.chat_message(m["role"]):
-            st.markdown(m["content"])
+        role = m.get("role", "assistant")
+        content = m.get("content", "")
+        if role == "user":
+            c1, c2 = st.columns([0.35, 0.65])
+            with c2:
+                st.markdown(f"<div class='bubble user'>{content}</div>", unsafe_allow_html=True)
+        else:
+            c1, c2 = st.columns([0.65, 0.35])
+            with c1:
+                st.markdown(f"<div class='bubble assistant'>{content}</div>", unsafe_allow_html=True)
 
     user_input = st.chat_input("Escribe tu mensaje…")
     if user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
+        # Mostrar prompt del usuario (derecha)
+        c1, c2 = st.columns([0.35, 0.65])
+        with c2:
+            st.markdown(f"<div class='bubble user'>{user_input}</div>", unsafe_allow_html=True)
 
         # Parsear a features y predecir
         feats = parse_text_to_features(user_input)
         st.session_state.last_features = feats
 
-        with st.chat_message("assistant"):
-            with st.spinner("Analizando y consultando la API…"):
-                resp, err = predict(feats)
-            if err:
-                st.error(f"Error: {err}")
-                reply = "Hubo un error al consultar la API."
+        with st.spinner("Analizando y consultando la API…"):
+            resp, err = predict(feats)
+        if err:
+            st.error(f"Error: {err}")
+            reply = "Hubo un error al consultar la API."
+        else:
+            prob = float(resp.get("probability", 0.0))
+            pred = int(resp.get("predicted", 0))
+            # Resumen de features detectadas
+            if feats:
+                det = ", ".join([f"{k}={v}" for k, v in feats.items()])
+                intro = f"Con lo que mencionaste ({det})"
             else:
-                prob = float(resp.get("probability", 0.0))
-                pred = int(resp.get("predicted", 0))
-                # Resumen de features detectadas
-                if feats:
-                    det = ", ".join([f"{k}={v}" for k, v in feats.items()])
-                    intro = f"Con lo que mencionaste ({det})"
-                else:
-                    intro = "Con información parcial (faltan datos; completaré faltantes con valores por defecto)"
+                intro = "Con información parcial (faltan datos; completaré faltantes con valores por defecto)"
 
-                decision = "SÍ" if pred == 1 else "NO"
-                tono = "Es probable que " + ("SÍ " if pred == 1 else "NO ") + "contrates"
-                reply = f"{intro}, mi estimación es: {tono} (≈ {prob:.0%})."
-                if 0.45 <= prob <= 0.55:
-                    reply += " Nota: la probabilidad está cerca del 50%, la confianza es moderada."
-                st.markdown(reply)
-            st.session_state.messages.append({"role": "assistant", "content": reply})
+            tono = "Es probable que " + ("SÍ " if pred == 1 else "NO ") + "contrates"
+            reply = f"{intro}, mi estimación es: {tono} (≈ {prob:.0%})."
+            if 0.45 <= prob <= 0.55:
+                reply += " Nota: la probabilidad está cerca del 50%, la confianza es moderada."
+
+        # Mostrar respuesta del asistente (izquierda)
+        c1, c2 = st.columns([0.65, 0.35])
+        with c1:
+            st.markdown(f"<div class='bubble assistant'>{reply}</div>", unsafe_allow_html=True)
+        st.session_state.messages.append({"role": "assistant", "content": reply})
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
     # Feedback y reentrenamiento removidos de la UI para simplificar la experiencia
 
@@ -279,6 +341,9 @@ with tab_chat:
 with tab_form:
     st.subheader("Formulario de predicción")
     st.caption("Completa los datos clave. Puedes dejar campos vacíos: el modelo completará faltantes de forma segura.")
+
+    # Contenedor visual para el formulario
+    st.markdown("<div class='app-card'>", unsafe_allow_html=True)
 
     col1, col2 = st.columns(2)
 
@@ -374,6 +439,8 @@ with tab_form:
                 st.info(f"Es más probable que NO contrates (≈ {prob:.0%}).")
             st.caption(f"Modelo: {resp.get('model_version')} · Fecha: {str(resp.get('timestamp'))}")
 
+    st.markdown("</div>", unsafe_allow_html=True)
+
 
 with tab_metrics:
     st.subheader("Métricas del modelo y gráficas")
@@ -388,6 +455,8 @@ with tab_metrics:
             latest = history[0]
             m = latest.get("metrics", {})
 
+            # Resumen rápido en tarjeta
+            st.markdown("<div class='app-card'>", unsafe_allow_html=True)
             st.markdown("##### Resumen rápido")
             c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("Exactitud (Accuracy)", f"{m.get('accuracy', 0):.3f}")
@@ -404,8 +473,11 @@ with tab_metrics:
                     "- F1: equilibrio entre Precisión y Recall.\n"
                     "- ROC-AUC: capacidad del modelo para separar Sí/No (más alto es mejor)."
                 )
+            st.markdown("</div>", unsafe_allow_html=True)
 
             st.markdown("---")
+            # Gráficas en tarjeta
+            st.markdown("<div class='app-card'>", unsafe_allow_html=True)
             gc1, gc2, gc3, gc4 = st.columns(4)
             with gc1:
                 draw_confusion_matrix(m.get("confusion_matrix", [[0,0],[0,0]]))
@@ -417,18 +489,22 @@ with tab_metrics:
                 draw_y_dist(m.get("y_distribution", {"0":0, "1":0}))
                 st.caption("Objetivo (y): 0 = No, 1 = Sí")
 
-            # Tendencia histórica de métricas
-            st.markdown("#### Tendencia histórica por versión")
-            hist_df = pd.DataFrame([
-                {
-                    "version": h.get("version"),
-                    "created_at": h.get("created_at"),
-                    **{k: h.get("metrics", {}).get(k) for k in ["accuracy","precision","recall","f1","roc_auc"]},
-                }
-                for h in history
-            ])
-            if not hist_df.empty:
-                st.line_chart(hist_df.set_index("version")[ ["accuracy","precision","recall","f1","roc_auc"] ])
+            # Tendencia histórica por versión (mostrar solo si hay 2+ versiones)
+            if len(history) >= 2:
+                st.markdown("#### Tendencia histórica por versión")
+                hist_df = pd.DataFrame([
+                    {
+                        "version": h.get("version"),
+                        "created_at": h.get("created_at"),
+                        **{k: h.get("metrics", {}).get(k) for k in ["accuracy","precision","recall","f1","roc_auc"]},
+                    }
+                    for h in history
+                ])
+                if not hist_df.empty:
+                    st.line_chart(hist_df.set_index("version")[ ["accuracy","precision","recall","f1","roc_auc"] ])
+            else:
+                st.info("La tendencia histórica aparece cuando existen al menos dos versiones (v1, v2, …).")
+            st.markdown("</div>", unsafe_allow_html=True)
 
 
 ## Pestaña de reentrenamiento eliminada para simplificar la interfaz
