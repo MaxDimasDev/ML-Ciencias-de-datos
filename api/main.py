@@ -58,8 +58,8 @@ def on_startup():
         db.close()
 
 
-# Auto-retrain settings (can be tuned via env vars)
-AUTO_RETRAIN = os.getenv("AUTO_RETRAIN", "true").lower() in {"1", "true", "yes", "y", "on"}
+# Auto-retrain settings (disabled by default for a simpler experience)
+AUTO_RETRAIN = os.getenv("AUTO_RETRAIN", "false").lower() in {"1", "true", "yes", "y", "on"}
 try:
     RETRAIN_MIN_FEEDBACK = int(os.getenv("RETRAIN_MIN_FEEDBACK", "1"))
 except Exception:

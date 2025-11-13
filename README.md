@@ -2,11 +2,10 @@
 
 Este proyecto implementa un sistema completo de ML para predecir si un cliente contratará un producto bancario, usando el dataset Bank Marketing (UCI). Incluye:
 
-- API REST con FastAPI para predicción, métricas y reentrenamiento.
+- API REST con FastAPI para predicción y métricas.
 - Modelo de Regresión Logística con `scikit-learn`, pipeline y métricas almacenadas.
 - Base de datos PostgreSQL para predicciones, métricas y versiones del modelo.
-- Dashboard web en Streamlit para ingresar datos, ver métricas y reentrenar.
- - Dashboard web en Streamlit para ingresar datos, modo Chat asistente, ver métricas y reentrenar.
+- Dashboard web en Streamlit para ingresar datos (Formulario en español), modo Chat asistente y ver métricas.
 - Listo para despliegue gratuito: API en Render, BD en Neon, Dashboard en Streamlit Community Cloud.
 
 ## Estructura
@@ -37,8 +36,6 @@ Este proyecto implementa un sistema completo de ML para predecir si un cliente c
 - Crea un archivo `.env` (no se versiona) a partir de `.env.example` y define al menos:
   - `DATABASE_URL` → cadena de conexión Postgres (por ejemplo, Neon) con `sslmode=require`.
   - `BANK_DATASET_PATH` (opcional) → ruta a un CSV local; si se omite, la API descargará el dataset UCI automáticamente.
-  - `AUTO_RETRAIN` (opcional) → `true/false`. Si true, la API reentrena en background con feedback etiquetado.
-  - `RETRAIN_MIN_FEEDBACK` (opcional) → entero N; reentrena cada N feedbacks (por defecto 1).
   - `API_BASE_URL` (para el dashboard, si no usas localhost).
 - El Dashboard en Streamlit Community Cloud debe usar `Secrets` y definir `API_BASE_URL` ahí.
 - Los datasets locales `bank-full.csv` y `bank-additional-full.csv` están ignorados por `.gitignore` para evitar subirlos al repo.
@@ -68,7 +65,6 @@ uvicorn api.main:app --reload
 - Salud: http://localhost:8000/health
 - Predicción: POST http://localhost:8000/predict
 - Métricas: GET http://localhost:8000/metrics
-- Reentrenar: POST http://localhost:8000/retrain (multipart con CSV opcional con columna `y`)
 
 4) Levantar el dashboard (requiere `API_BASE_URL` si la API no está en localhost):
 
@@ -108,7 +104,7 @@ streamlit run dashboard/app.py
 
 2) Predicción (dashboard → API): el usuario ingresa datos, el dashboard envía JSON a la API, la API carga el modelo más reciente, predice, devuelve probabilidad y guarda el registro en la tabla `predictions` con timestamp y versión.
 
-3) Reentrenamiento: el dashboard permite subir un CSV etiquetado (con columna `y`) y ahora también enviar feedback por ejemplo individual desde el Chat. La API reentrena automáticamente en segundo plano cuando se alcanza el umbral `RETRAIN_MIN_FEEDBACK` o inmediatamente si vale 1.
+3) Interacción: desde el dashboard puedes usar el modo Chat (texto libre) o el Formulario (campos en español con ayudas) para consultar una probabilidad de contratación clara (SÍ/NO + porcentaje). No se muestra “predicción 0/1”.
 
 ## Endpoints (resumen)
 
@@ -116,20 +112,19 @@ streamlit run dashboard/app.py
 - `GET /model/latest` → versión y métricas del modelo de producción
 - `POST /predict` → body `{ "features": { ... } }` → probabilidad, predicción, timestamp, versión
 - `GET /metrics?limit=5` → historial de métricas por versión
-- `POST /retrain` → `multipart/form-data` con `labeled_csv` opcional
-- `POST /feedback` → body `{ "features": { ... }, "y": 0|1 }` → guarda ejemplo etiquetado y puede disparar reentrenamiento en background
+  (Reentrenamiento y feedback deshabilitados en esta versión del dashboard)
 
-## Dashboard: Predicción, Chat y Métricas
+## Dashboard: Chat, Formulario y Métricas
 
 - Accuracy, Precision, Recall, F1, ROC-AUC, (PR-AUC), Matriz de confusión
 - Curva ROC, Curva Precision-Recall, Distribución de `y`
 - Tendencia histórica por versión (líneas)
- - Pestaña "Chat": escribe en lenguaje natural (p. ej., "Tengo 45 años, saldo 1200, hipoteca sí"), el sistema extrae rasgos básicos y predice. Puedes enviar feedback del resultado real para mejorar el modelo.
+- Pestaña "Chat": escribe en lenguaje natural (p. ej., "Tengo 45 años, saldo 1200, hipoteca sí"). El asistente responde en lenguaje claro: “Es probable que SÍ/NO contrates (≈ 78%)”.
+- Pestaña "Formulario": campos en español con instrucciones (“Ingresa tu edad”, “¿Tienes hipoteca?”). Los parámetros avanzados están ocultos en un panel opcional.
 
 ## Notas
 
 - La API por defecto permite CORS `*` para facilidad de demo.
-- Para reentrenar con datos nuevos reales, el CSV debe tener las mismas columnas del dataset base y columna `y` (yes/no o 1/0). Si viene como yes/no, el procesamiento lo convertirá internamente.
 - El pipeline maneja categorías desconocidas y realiza escalado en numéricos.
 
 ## Licencia

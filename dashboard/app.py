@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 
-st.set_page_config(page_title="Bank Marketing - Logistic Regression", layout="wide")
+st.set_page_config(page_title="Asistente de Contratación Bancaria", layout="wide")
 
 
 def get_api_base() -> str:
@@ -50,25 +50,25 @@ def predict(features: dict):
         return None, str(e)
 
 
-def retrain(file_bytes: bytes | None):
-    files = None
-    if file_bytes:
-        files = {"labeled_csv": ("new_data.csv", file_bytes, "text/csv")}
-    try:
-        r = requests.post(f"{API_BASE}/retrain", files=files, timeout=600)
-        r.raise_for_status()
-        return r.json(), None
-    except Exception as e:
-        return None, str(e)
+## Reentrenamiento y feedback deshabilitados en UI
+# def retrain(file_bytes: bytes | None):
+#     files = None
+#     if file_bytes:
+#         files = {"labeled_csv": ("new_data.csv", file_bytes, "text/csv")}
+#     try:
+#         r = requests.post(f"{API_BASE}/retrain", files=files, timeout=600)
+#         r.raise_for_status()
+#         return r.json(), None
+#     except Exception as e:
+#         return None, str(e)
 
-
-def send_feedback(features: dict, y: int):
-    try:
-        r = requests.post(f"{API_BASE}/feedback", json={"features": features, "y": int(y)}, timeout=60)
-        r.raise_for_status()
-        return r.json(), None
-    except Exception as e:
-        return None, str(e)
+# def send_feedback(features: dict, y: int):
+#     try:
+#         r = requests.post(f"{API_BASE}/feedback", json={"features": features, "y": int(y)}, timeout=60)
+#         r.raise_for_status()
+#         return r.json(), None
+#     except Exception as e:
+#         return None, str(e)
 
 
 # --- Chatbot helpers ---
@@ -219,15 +219,16 @@ def draw_y_dist(y_dist):
     st.pyplot(fig)
 
 
-st.title("Predicción de Contratación de Producto Bancario")
+st.title("Asistente de Contratación Bancaria")
 st.caption("Modelo de Regresión Logística + API FastAPI + BD PostgreSQL")
 
-tab_chat, tab_pred, tab_metrics, tab_retrain = st.tabs(["Chat", "Predicción", "Métricas", "Reentrenamiento"])
+# Pestañas: chat, formulario y métricas (reentrenamiento eliminado)
+tab_chat, tab_form, tab_metrics = st.tabs(["Chat", "Formulario", "Métricas"])
 
 
 with tab_chat:
     st.subheader("Asistente tipo Chat")
-    st.caption("Escribe en lenguaje natural: 'Tengo 45 años, saldo 1200, hipoteca sí…' y te diré el riesgo.")
+    st.caption("Escribe en lenguaje natural: 'Tengo 45 años, saldo 1200, hipoteca sí…' y te diré tu probabilidad de contratar.")
 
     if "messages" not in st.session_state:
         st.session_state.messages = [
@@ -255,76 +256,84 @@ with tab_chat:
                 st.error(f"Error: {err}")
                 reply = "Hubo un error al consultar la API."
             else:
-                prob = resp.get("probability", 0.0)
-                pred = resp.get("predicted", 0)
+                prob = float(resp.get("probability", 0.0))
+                pred = int(resp.get("predicted", 0))
                 # Resumen de features detectadas
                 if feats:
                     det = ", ".join([f"{k}={v}" for k, v in feats.items()])
                     intro = f"Con lo que mencionaste ({det})"
                 else:
-                    intro = "Con información parcial (faltan datos, imputo valores por defecto)"
-                reply = f"{intro}, estimo probabilidad {prob:.1%} y predicción {pred}."
+                    intro = "Con información parcial (faltan datos; completaré faltantes con valores por defecto)"
+
+                decision = "SÍ" if pred == 1 else "NO"
+                tono = "Es probable que " + ("SÍ " if pred == 1 else "NO ") + "contrates"
+                reply = f"{intro}, mi estimación es: {tono} (≈ {prob:.0%})."
+                if 0.45 <= prob <= 0.55:
+                    reply += " Nota: la probabilidad está cerca del 50%, la confianza es moderada."
                 st.markdown(reply)
             st.session_state.messages.append({"role": "assistant", "content": reply})
 
-    st.markdown("---")
-    st.markdown("#### Feedback (opcional)")
-    st.caption("Si conoces el resultado real, envíalo para mejorar el modelo. Esto puede disparar un reentrenamiento automático.")
-    colf1, colf2 = st.columns([2,1])
-    with colf1:
-        know = st.radio("¿El cliente finalmente contrató?", ["No", "Sí"], horizontal=True, key="fb_yesno")
-    with colf2:
-        send = st.button("Enviar feedback", use_container_width=True)
-    if send:
-        feats = st.session_state.get("last_features", {})
-        if not feats:
-            st.warning("Primero realiza una predicción en el chat para capturar los datos.")
-        else:
-            y_val = 1 if know == "Sí" else 0
-            with st.spinner("Enviando feedback a la API…"):
-                r, err = send_feedback(feats, y_val)
-            if err:
-                st.error(f"No se pudo enviar feedback: {err}")
-            else:
-                st.success("Feedback enviado. Gracias. El modelo puede reentrenarse en segundo plano.")
+    # Feedback y reentrenamiento removidos de la UI para simplificar la experiencia
 
 
-with tab_pred:
-    st.subheader("Ingresar datos para predicción")
-    col1, col2, col3 = st.columns(3)
+with tab_form:
+    st.subheader("Formulario de predicción")
+    st.caption("Completa los datos clave. Puedes dejar campos vacíos: el modelo completará faltantes de forma segura.")
 
-    # Valores por defecto sensatos; el pipeline imputará faltantes si se omiten
+    col1, col2 = st.columns(2)
+
+    # Básicos en español
     with col1:
-        age = st.number_input("age", min_value=18, max_value=100, value=35)
-        job = st.selectbox("job", [
-            "admin.", "blue-collar", "entrepreneur", "housemaid", "management", "retired",
-            "self-employed", "services", "student", "technician", "unemployed", "unknown"
-        ], index=0)
-        marital = st.selectbox("marital", ["single", "married", "divorced", "unknown"], index=1)
-        education = st.selectbox("education", [
-            "basic.4y", "basic.6y", "basic.9y", "high.school", "illiterate",
-            "professional.course", "university.degree", "unknown"
-        ], index=6)
-        default = st.selectbox("default", ["yes", "no", "unknown"], index=2)
-        balance = st.number_input("balance", value=0, step=100)
-        housing = st.selectbox("housing", ["yes", "no", "unknown"], index=1)
+        age = st.number_input("Edad", min_value=18, max_value=100, value=35, help="Ingresa tu edad en años")
+        job = st.selectbox(
+            "Ocupación",
+            [
+                "admin.", "blue-collar", "entrepreneur", "housemaid", "management", "retired",
+                "self-employed", "services", "student", "technician", "unemployed", "unknown",
+            ],
+            index=0,
+            help="Selecciona la categoría que mejor te describa",
+        )
+        marital = st.selectbox(
+            "Estado civil",
+            ["single", "married", "divorced", "unknown"],
+            index=1,
+            help="Elige tu estado civil",
+        )
+        education = st.selectbox(
+            "Nivel educativo",
+            [
+                "basic.4y", "basic.6y", "basic.9y", "high.school", "illiterate",
+                "professional.course", "university.degree", "unknown",
+            ],
+            index=6,
+            help="Selecciona tu nivel de estudios",
+        )
+        default = st.selectbox("¿En mora (default)?", ["no", "yes", "unknown"], index=0, help="Si alguna vez estuviste en incumplimiento")
+        balance = st.number_input("Saldo en cuenta", value=0, step=100, help="Saldo promedio en tu cuenta (puede ser negativo)")
+        housing = st.selectbox("¿Tienes hipoteca?", ["no", "yes", "unknown"], index=0)
+
     with col2:
-        loan = st.selectbox("loan", ["yes", "no", "unknown"], index=1)
-        contact = st.selectbox("contact", ["cellular", "telephone"], index=0)
-        day = st.number_input("day", min_value=1, max_value=31, value=15)
-        month = st.selectbox("month", ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"], index=7)
-        day_of_week = st.selectbox("day_of_week", ["mon","tue","wed","thu","fri"], index=2)
-        campaign = st.number_input("campaign", min_value=1, max_value=60, value=1)
-    with col3:
-        pdays = st.number_input("pdays", min_value=-1, max_value=999, value=999)
-        previous = st.number_input("previous", min_value=0, max_value=100, value=0)
-        poutcome = st.selectbox("poutcome", ["failure","nonexistent","success"], index=1)
-        # Campos del dataset 'bank-additional' (opcionales, se ignorarán si no aplican al modelo actual)
-        emp_var_rate = st.number_input("emp.var.rate", value=1.1, format="%0.2f")
-        cons_price_idx = st.number_input("cons.price.idx", value=93.75, format="%0.2f")
-        cons_conf_idx = st.number_input("cons.conf.idx", value=-40.0, format="%0.1f")
-        euribor3m = st.number_input("euribor3m", value=4.0, format="%0.3f")
-        nr_employed = st.number_input("nr.employed", value=5191.0, format="%0.1f")
+        loan = st.selectbox("¿Tienes préstamo personal?", ["no", "yes", "unknown"], index=0)
+        contact = st.selectbox("Medio de contacto", ["cellular", "telephone"], index=0, help="El canal por el que te contactamos")
+        day = st.number_input("Día del mes", min_value=1, max_value=31, value=15, help="Día del contacto")
+        month = st.selectbox("Mes", ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"], index=7)
+        day_of_week = st.selectbox("Día de la semana", ["mon","tue","wed","thu","fri"], index=2)
+        campaign = st.number_input("Número de contactos (campaña)", min_value=1, max_value=60, value=1, help="Cuántas veces te hemos contactado en esta campaña")
+
+    # Avanzados ocultos para no confundir
+    with st.expander("Opcional: ajustes avanzados (puedes ignorarlos)"):
+        c3a, c3b = st.columns(2)
+        with c3a:
+            pdays = st.number_input("Días desde contacto previo (pdays)", min_value=-1, max_value=999, value=999, help="-1 si no hay registro previo")
+            previous = st.number_input("Contactos previos", min_value=0, max_value=100, value=0)
+            poutcome = st.selectbox("Resultado campaña previa", ["failure","nonexistent","success"], index=1)
+        with c3b:
+            emp_var_rate = st.number_input("Tasa variación empleo (emp.var.rate)", value=1.1, format="%0.2f")
+            cons_price_idx = st.number_input("Índice precios (cons.price.idx)", value=93.75, format="%0.2f")
+            cons_conf_idx = st.number_input("Índice confianza (cons.conf.idx)", value=-40.0, format="%0.1f")
+            euribor3m = st.number_input("Euribor 3m", value=4.0, format="%0.3f")
+            nr_employed = st.number_input("Empleados (nr.employed)", value=5191.0, format="%0.1f")
 
     features = {
         "age": int(age),
@@ -350,18 +359,20 @@ with tab_pred:
         "nr.employed": float(nr_employed),
     }
 
-    if st.button("Predecir", type="primary"):
-        with st.spinner("Solicitando a la API..."):
+    if st.button("Calcular probabilidad", type="primary"):
+        with st.spinner("Consultando a la API..."):
             resp, err = predict(features)
         if err:
-            st.error(f"Error en predicción: {err}")
+            st.error(f"Error en la predicción: {err}")
         elif resp:
-            st.success("¡Predicción generada!")
-            colr1, colr2, colr3, colr4 = st.columns(4)
-            colr1.metric("Predicción (y)", str(resp.get("predicted")))
-            colr2.metric("Probabilidad", f"{resp.get('probability'):.3f}")
-            colr3.metric("Modelo", resp.get("model_version"))
-            colr4.metric("Timestamp", str(resp.get("timestamp")))
+            prob = float(resp.get("probability", 0.0))
+            pred = int(resp.get("predicted", 0))
+            resultado = "SÍ" if pred == 1 else "NO"
+            if pred == 1:
+                st.success(f"Es probable que SÍ contrates (≈ {prob:.0%}).")
+            else:
+                st.info(f"Es más probable que NO contrates (≈ {prob:.0%}).")
+            st.caption(f"Modelo: {resp.get('model_version')} · Fecha: {str(resp.get('timestamp'))}")
 
 
 with tab_metrics:
@@ -377,12 +388,22 @@ with tab_metrics:
             latest = history[0]
             m = latest.get("metrics", {})
 
+            st.markdown("##### Resumen rápido")
             c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("Accuracy", f"{m.get('accuracy', 0):.3f}")
-            c2.metric("Precision", f"{m.get('precision', 0):.3f}")
-            c3.metric("Recall", f"{m.get('recall', 0):.3f}")
-            c4.metric("F1", f"{m.get('f1', 0):.3f}")
+            c1.metric("Exactitud (Accuracy)", f"{m.get('accuracy', 0):.3f}")
+            c2.metric("Precisión (Sí)", f"{m.get('precision', 0):.3f}")
+            c3.metric("Cobertura/Recall (Sí)", f"{m.get('recall', 0):.3f}")
+            c4.metric("F1 (Sí)", f"{m.get('f1', 0):.3f}")
             c5.metric("ROC-AUC", f"{m.get('roc_auc', 0):.3f}")
+
+            with st.expander("¿Qué significa cada métrica?"):
+                st.markdown(
+                    "- Exactitud: porcentaje de aciertos globales.\n"
+                    "- Precisión (Sí): de los casos predichos como Sí, cuántos realmente eran Sí.\n"
+                    "- Cobertura/Recall (Sí): de todos los Sí reales, cuántos detecta.\n"
+                    "- F1: equilibrio entre Precisión y Recall.\n"
+                    "- ROC-AUC: capacidad del modelo para separar Sí/No (más alto es mejor)."
+                )
 
             st.markdown("---")
             gc1, gc2, gc3, gc4 = st.columns(4)
@@ -394,6 +415,7 @@ with tab_metrics:
                 draw_pr(m.get("pr_curve", {}))
             with gc4:
                 draw_y_dist(m.get("y_distribution", {"0":0, "1":0}))
+                st.caption("Objetivo (y): 0 = No, 1 = Sí")
 
             # Tendencia histórica de métricas
             st.markdown("#### Tendencia histórica por versión")
@@ -409,22 +431,7 @@ with tab_metrics:
                 st.line_chart(hist_df.set_index("version")[ ["accuracy","precision","recall","f1","roc_auc"] ])
 
 
-with tab_retrain:
-    st.subheader("Reentrenar Modelo")
-    st.write("Opcionalmente sube un CSV con datos etiquetados (debe incluir columna 'y').")
-    uploaded = st.file_uploader("CSV etiquetado", type=["csv"], accept_multiple_files=False)
-
-    if st.button("Reentrenar", type="primary"):
-        file_bytes = uploaded.read() if uploaded is not None else None
-        with st.spinner("Reentrenando en la API (puede tardar unos minutos)..."):
-            resp, err = retrain(file_bytes)
-        if err:
-            st.error(f"Error al reentrenar: {err}")
-        else:
-            st.success("¡Reentrenamiento completo!")
-            st.json(resp)
-            st.cache_data.clear()
-            st.toast("Métricas y modelo actualizados. Refresca las secciones.")
+## Pestaña de reentrenamiento eliminada para simplificar la interfaz
 
 st.sidebar.info("API base: " + API_BASE)
 st.sidebar.caption("Configura API_BASE_URL en Secrets o variables de entorno.")
