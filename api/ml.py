@@ -11,6 +11,7 @@ from typing import Dict, Any, Tuple
 
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import train_test_split
@@ -94,6 +95,7 @@ def _build_pipeline(X: pd.DataFrame) -> Tuple[Pipeline, Dict[str, Any]]:
                 "cat",
                 Pipeline(
                     steps=[
+                        ("imputer", SimpleImputer(strategy="most_frequent")),
                         ("onehot", OneHotEncoder(handle_unknown="ignore")),
                     ]
                 ),
@@ -106,6 +108,7 @@ def _build_pipeline(X: pd.DataFrame) -> Tuple[Pipeline, Dict[str, Any]]:
                 "num",
                 Pipeline(
                     steps=[
+                        ("imputer", SimpleImputer(strategy="median")),
                         ("scaler", StandardScaler(with_mean=True, with_std=True)),
                     ]
                 ),

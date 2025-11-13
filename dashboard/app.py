@@ -35,10 +35,15 @@ st.markdown(
 
 
 def get_api_base() -> str:
-    # Prefer Streamlit secrets, fallback to env var, then localhost
-    api = st.secrets.get("API_BASE_URL", None) if hasattr(st, "secrets") else None
+    # Prefer variable de entorno; si no existe, intentar en secrets; por último localhost
+    api = os.getenv("API_BASE_URL", None)
     if not api:
-        api = os.getenv("API_BASE_URL", "http://localhost:8000")
+        try:
+            api = st.secrets["API_BASE_URL"]
+        except Exception:
+            api = None
+    if not api:
+        api = "http://localhost:8000"
     return api.rstrip("/")
 
 
