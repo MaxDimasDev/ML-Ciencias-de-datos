@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import csv
+from io import StringIO
 from typing import Tuple
+from urllib.parse import urlparse, unquote
 
 import pandas as pd
 import requests
@@ -188,15 +191,99 @@ def collect_training_data() -> pd.DataFrame:
         with engine.connect() as conn:
             df = pd.read_sql_query(sql, conn)
     elif source_url:
-        r = requests.get(source_url, timeout=60)
-        r.raise_for_status()
-        ctype = r.headers.get("Content-Type", "")
-        if "application/json" in ctype or r.text.strip().startswith("["):
-            df = pd.DataFrame(r.json())
-        else:
-            from io import StringIO
+        # Permitir tanto URLs HTTP(S) como rutas locales (incluyendo file://)
+        is_http = source_url.lower().startswith(("http://", "https://"))
 
-            df = pd.read_csv(StringIO(r.text))
+        if is_http:
+            r = requests.get(source_url, timeout=60)
+            r.raise_for_status()
+            ctype = r.headers.get("Content-Type", "")
+            text = r.text
+            if "application/json" in ctype or text.strip().startswith("[") or text.strip().startswith("{"):
+                # JSON: array de objetos o un objeto con clave "data"
+                try:
+                    payload = r.json()
+                except Exception:
+                    payload = None
+                if isinstance(payload, list):
+                    df = pd.DataFrame(payload)
+                elif isinstance(payload, dict):
+                    if "data" in payload and isinstance(payload["data"], list):
+                        df = pd.DataFrame(payload["data"])
+                    else:
+                        # Último recurso: DataFrame de un único objeto
+                        df = pd.DataFrame([payload])
+                else:
+                    # Fallback si no pudimos decodificar JSON
+                    # Intentar CSV auto-delimited (coma/semicolon)
+                    try:
+                        sample = text[:2048]
+                        try:
+                            dialect = csv.Sniffer().sniff(sample, delimiters=",;")
+                            sep = dialect.delimiter
+                        except Exception:
+                            sep = ","
+                        df = pd.read_csv(StringIO(text), sep=sep)
+                    except Exception as e:
+                        raise RuntimeError(f"No se pudo interpretar la respuesta HTTP como JSON/CSV: {e}")
+            else:
+                # CSV: autodetectar delimitador , o ;
+                sample = text[:2048]
+                try:
+                    dialect = csv.Sniffer().sniff(sample, delimiters=",;")
+                    sep = dialect.delimiter
+                except Exception:
+                    sep = ","
+                df = pd.read_csv(StringIO(text), sep=sep)
+        else:
+            # Ruta local (Windows o Unix) o esquema file://
+            path = source_url
+            if source_url.lower().startswith("file://"):
+                parsed = urlparse(source_url)
+                path = unquote(parsed.path)
+                # En Windows urlparse('file:///C:/...').path -> '/C:/...'
+                if os.name == "nt" and path.startswith("/") and len(path) > 3 and path[2] == ":":
+                    path = path[1:]
+
+            if not os.path.exists(path):
+                raise RuntimeError(f"No existe el archivo local: {path}")
+
+            _, ext = os.path.splitext(path)
+            ext = ext.lower()
+            if ext == ".json":
+                # Leer JSON de lista de objetos o dict con 'data'
+                import json
+
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    try:
+                        payload = json.loads(content)
+                    except Exception as e:
+                        raise RuntimeError(f"JSON inválido en {path}: {e}")
+
+                if isinstance(payload, list):
+                    df = pd.DataFrame(payload)
+                elif isinstance(payload, dict):
+                    if "data" in payload and isinstance(payload["data"], list):
+                        df = pd.DataFrame(payload["data"])
+                    else:
+                        df = pd.DataFrame([payload])
+                else:
+                    raise RuntimeError("Formato JSON no soportado: se espera lista de objetos o dict con 'data'.")
+            else:
+                # CSV local con autodetección de delimitador
+                try:
+                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                        sample = f.read(2048)
+                        try:
+                            dialect = csv.Sniffer().sniff(sample, delimiters=",;")
+                            sep = dialect.delimiter
+                        except Exception:
+                            sep = ","
+                except FileNotFoundError:
+                    raise RuntimeError(f"No se pudo abrir el archivo: {path}")
+
+                df = pd.read_csv(path, sep=sep)
     else:
         raise RuntimeError(
             "No se configuró TRAINING_SQL ni TRAINING_SOURCE_URL para minado de datos."
