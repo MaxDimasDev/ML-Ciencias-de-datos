@@ -3,11 +3,20 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    # Default to local sqlite for easy local dev; use Postgres in cloud
-    "sqlite:///./local.db",
-)
+# Read and sanitize DATABASE_URL from env; default to local SQLite for dev
+_DEFAULT_SQLITE = "sqlite:///./local.db"
+
+_raw_db_url = os.getenv("DATABASE_URL", "")
+# Strip accidental whitespace/newlines from copy-paste
+_raw_db_url = _raw_db_url.strip() if isinstance(_raw_db_url, str) else ""
+
+if not _raw_db_url:
+    DATABASE_URL = _DEFAULT_SQLITE
+else:
+    # Normalize common provider format postgres:// → postgresql+psycopg2://
+    if _raw_db_url.startswith("postgres://"):
+        _raw_db_url = "postgresql+psycopg2://" + _raw_db_url[len("postgres://"):]
+    DATABASE_URL = _raw_db_url
 
 
 # For SQLAlchemy 2.0 style
