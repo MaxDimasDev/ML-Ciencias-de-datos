@@ -23,11 +23,11 @@ st.markdown(
       .bubble.user { border-color:#1f6feb; background:rgba(31,111,235,0.12); }
       .section-title { margin: 0 0 0.5rem 0; }
       .muted { color:#6b7280; font-size:0.9rem; }
-      /* Chat layout */
-      .chat-wrapper { display:flex; flex-direction:column; height: 70vh; gap: 8px; }
-      #chat-scroll { flex: 1 1 auto; overflow-y: auto; padding: 6px; }
-      .chat-input-area { position: sticky; bottom: 0; padding-top: 6px; }
-      .chat-form { max-width: 720px; margin: 0 auto; }
+      /* Chat nativo Streamlit: centrar y limitar ancho */
+      [data-testid="stChatInput"] > div { max-width: 720px; margin: 0 auto; }
+      [data-testid="stChatMessage"] { max-width: 720px; margin-left: auto; margin-right: auto; }
+      /* Reducir espacio superior para acercar el input al chat */
+      section.main > div.block-container { padding-top: 0.6rem; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -353,30 +353,16 @@ with tab_chat:
             {"role": "assistant", "content": "Hola, cuéntame algunos datos (edad, saldo, hipoteca sí/no, estado civil…) y estimo tu probabilidad."}
         ]
 
-    # Render de mensajes en un solo bloque HTML para evitar contenedores vacíos
-    msg_html_parts = ["<div class='chat-wrapper'><div id='chat-scroll'>"]
+    # Render nativo de mensajes (centrado y ancho acotado por CSS)
     for m in st.session_state.messages:
         role = m.get("role", "assistant")
-        content = html.escape(m.get("content", ""))
-        if role == "user":
-            msg_html_parts.append(
-                f"<div style='display:flex; justify-content:flex-end;'><div class='bubble user'>{content}</div></div>"
-            )
-        else:
-            msg_html_parts.append(
-                f"<div style='display:flex; justify-content:flex-start;'><div class='bubble assistant'>{content}</div></div>"
-            )
-    msg_html_parts.append("</div></div>")
-    st.markdown("".join(msg_html_parts), unsafe_allow_html=True)
+        content = m.get("content", "")
+        with st.chat_message(role):
+            st.markdown(content)
 
-    # Input fijo abajo y centrado
-    st.markdown("<div class='chat-input-area'>", unsafe_allow_html=True)
-    with st.form("chat_form", clear_on_submit=True):
-        _cl, _cc, _cr = st.columns([0.2, 0.6, 0.2])
-        with _cc:
-            user_input = st.text_input("Escribe tu mensaje…", max_chars=400, label_visibility="collapsed")
-            send = st.form_submit_button("Enviar", use_container_width=True)
-    if send and user_input:
+    # Input fijo al fondo del viewport, centrado por CSS
+    user_input = st.chat_input("Escribe tu mensaje…")
+    if user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
 
         # Parsear a features y predecir
@@ -403,6 +389,7 @@ with tab_chat:
                 reply += " Nota: la probabilidad está cerca del 50%, la confianza es moderada."
 
         st.session_state.messages.append({"role": "assistant", "content": reply})
+        st.rerun()
 
     # Feedback y reentrenamiento removidos de la UI para simplificar la experiencia
 
