@@ -23,9 +23,9 @@ st.markdown(
       .bubble.user { border-color:#1f6feb; background:rgba(31,111,235,0.12); }
       .section-title { margin: 0 0 0.5rem 0; }
       .muted { color:#6b7280; font-size:0.9rem; }
-      /* Chat nativo Streamlit: centrar y limitar ancho */
-      [data-testid="stChatInput"] > div { max-width: 720px; margin: 0 auto; }
-      [data-testid="stChatMessage"] { max-width: 720px; margin-left: auto; margin-right: auto; }
+      /* Chat nativo Streamlit: centrar y limitar ancho (un poco más ancho) */
+      [data-testid="stChatInput"] > div { max-width: 900px; margin: 0 auto; }
+      [data-testid="stChatMessage"] { max-width: 900px; margin-left: auto; margin-right: auto; }
       /* Reducir espacio superior para acercar el input al chat */
       section.main > div.block-container { padding-top: 0.6rem; }
     </style>
@@ -336,14 +336,27 @@ with tab_home:
     )
     st.info("Tip: puedes dar pocos datos y el sistema completa faltantes de forma segura.")
 
+    with st.expander("¿Cómo funciona el modelo y el minado de datos?", expanded=False):
+        st.markdown(
+            """
+            - Entrenamiento sin dataset embebido: al iniciar la API, se mina el dataset desde una de dos fuentes configurables por entorno:
+              - `TRAINING_SQL`: una consulta SQL que corre sobre `DATABASE_URL` y devuelve columnas de features y la etiqueta `y`.
+              - `TRAINING_SOURCE_URL`: una URL que entrega CSV o JSON con las mismas columnas.
+            - Limpieza y preparación: se normalizan categorías (p. ej. valores en español → formato del modelo), se descarta `duration` y se construye un pipeline con `OneHotEncoder` + `StandardScaler` + Regresión Logística.
+            - Versionado: cada entrenamiento crea una versión de modelo con métricas (Accuracy, Precision, Recall, F1, ROC-AUC) que puedes ver en la pestaña **Métricas**.
+            - Predicción: puedes escribir en el **Chat** o usar el **Formulario** en español; el backend completa faltantes de forma segura.
+            - Reentrenamiento automático: si `AUTO_RETRAIN_AFTER_PREDICTION=true`, la API reentrena en background tras cada predicción usando de nuevo la fuente minada (y ejemplos etiquetados si hay).
+            """
+        )
+
 
 with tab_chat:
     st.subheader("Asistente tipo Chat")
-    top_l, top_r = st.columns([0.7, 0.3])
+    top_l, top_r = st.columns([0.85, 0.15])
     with top_l:
         st.markdown("<div class='muted'>Chatea en español y obtén una estimación clara.</div>", unsafe_allow_html=True)
     with top_r:
-        if st.button("Limpiar chat", use_container_width=True):
+        if st.button("Limpiar chat"):
             st.session_state.pop("messages", None)
             st.session_state.pop("last_features", None)
             st.rerun()
