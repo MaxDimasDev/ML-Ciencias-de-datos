@@ -62,6 +62,8 @@ def on_startup():
 
 # Auto-retrain settings (disabled by default for a simpler experience)
 AUTO_RETRAIN = os.getenv("AUTO_RETRAIN", "false").lower() in {"1", "true", "yes", "y", "on"}
+# Nuevo: reentrenar después de cada predicción (controlado por variable de entorno)
+AUTO_RETRAIN_AFTER_PREDICTION = os.getenv("AUTO_RETRAIN_AFTER_PREDICTION", "true").lower() in {"1", "true", "yes", "y", "on"}
 try:
     RETRAIN_MIN_FEEDBACK = int(os.getenv("RETRAIN_MIN_FEEDBACK", "1"))
 except Exception:
@@ -86,7 +88,7 @@ def model_latest(db: Session = Depends(get_db)):
 
 
 @app.post("/predict", response_model=PredictResponse)
-def predict(req: PredictRequest, db: Session = Depends(get_db)):
+def predict(req: PredictRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     mv = crud.get_latest_model(db)
     if mv is None:
         raise HTTPException(status_code=500, detail="Model not available")
@@ -126,6 +128,13 @@ def predict(req: PredictRequest, db: Session = Depends(get_db)):
         probability=proba,
         model=mv,
     )
+
+    # Disparar reentrenamiento en background si está habilitado
+    if AUTO_RETRAIN_AFTER_PREDICTION:
+        try:
+            background_tasks.add_task(_retrain_from_feedback_background)
+        except Exception:
+            pass
 
     return PredictResponse(
         predicted=pred,

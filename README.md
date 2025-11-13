@@ -37,6 +37,8 @@ Este proyecto implementa un sistema completo de ML para predecir si un cliente c
   - `DATABASE_URL` → cadena de conexión Postgres (por ejemplo, Neon) con `sslmode=require`.
   - `TRAINING_SQL` (opcional) → consulta SQL a ejecutar sobre `DATABASE_URL` que devuelva columnas de features y `y`.
   - `TRAINING_SOURCE_URL` (opcional) → URL que entregue CSV o JSON con columnas de features y `y`.
+  - `AUTO_RETRAIN_AFTER_PREDICTION` (default: `true`) → reentrena en background después de cada predicción usando el dataset minado.
+  - `AUTO_RETRAIN` (default: `false`) y `RETRAIN_MIN_FEEDBACK` → reentrenamiento basado en ejemplos etiquetados vía `/feedback`.
   - `API_BASE_URL` (para el dashboard, si no usas localhost).
 - Debes configurar `TRAINING_SQL` o `TRAINING_SOURCE_URL` para que el entrenamiento inicial funcione (no se descarga dataset).
 

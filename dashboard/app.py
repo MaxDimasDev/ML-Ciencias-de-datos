@@ -1,4 +1,5 @@
 import os
+import html
 import requests
 import streamlit as st
 import pandas as pd
@@ -42,6 +43,74 @@ def get_api_base() -> str:
 
 
 API_BASE = get_api_base()
+
+# Mapas ES→EN para normalizar valores del formulario (disponibles en todo el módulo)
+JOB_ES_TO_EN = {
+    "Administración": "admin.",
+    "Obrero": "blue-collar",
+    "Emprendedor": "entrepreneur",
+    "Empleada doméstica": "housemaid",
+    "Management": "management",
+    "Jubilado": "retired",
+    "Autónomo": "self-employed",
+    "Servicios": "services",
+    "Estudiante": "student",
+    "Técnico": "technician",
+    "Desempleado": "unemployed",
+    "Desconocido": "unknown",
+}
+
+MARITAL_ES_TO_EN = {
+    "Soltero": "single",
+    "Casado": "married",
+    "Divorciado": "divorced",
+    "Desconocido": "unknown",
+}
+
+EDU_ES_TO_EN = {
+    "Primaria (4y)": "basic.4y",
+    "Secundaria (6y)": "basic.6y",
+    "Básica (9y)": "basic.9y",
+    "Secundaria": "high.school",
+    "Curso profesional": "professional.course",
+    "Universidad": "university.degree",
+    "Iletrado": "illiterate",
+    "Desconocido": "unknown",
+}
+
+YES_NO_UNK_ES_TO_EN = {
+    "Sí": "yes",
+    "No": "no",
+    "Desconocido": "unknown",
+}
+
+CONTACT_ES_TO_EN = {
+    "Celular": "cellular",
+    "Teléfono": "telephone",
+}
+
+MONTH_ES_TO_EN = {
+    "ene": "jan",
+    "feb": "feb",
+    "mar": "mar",
+    "abr": "apr",
+    "may": "may",
+    "jun": "jun",
+    "jul": "jul",
+    "ago": "aug",
+    "sep": "sep",
+    "oct": "oct",
+    "nov": "nov",
+    "dic": "dec",
+}
+
+WDAY_ES_TO_EN = {
+    "Lun": "mon",
+    "Mar": "tue",
+    "Mié": "wed",
+    "Jue": "thu",
+    "Vie": "fri",
+}
 
 
 @st.cache_data(ttl=60)
@@ -249,22 +318,22 @@ tab_home, tab_chat, tab_form, tab_metrics = st.tabs(["Inicio", "Chat", "Formular
 
 with tab_home:
     st.subheader("Guía rápida")
-    st.markdown('<div class="app-card">', unsafe_allow_html=True)
-    st.markdown("""
-    - Chat: escribe en lenguaje natural (por ejemplo: "Tengo 36 años, saldo 600, hipoteca sí, casado"). Te responderé con “SÍ/NO” y un porcentaje.
-    - Formulario: completa los campos en español. Los parámetros avanzados están en un panel opcional.
-    - Métricas: ve el rendimiento del modelo (Exactitud, Precisión, Recall, F1, ROC-AUC) y gráficas interpretables.
-    """)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        - Chat: escribe en lenguaje natural (por ejemplo: "Tengo 36 años, saldo 600, hipoteca sí, casado"). Te responderé con “SÍ/NO” y un porcentaje.
+        - Formulario: completa los campos en español. Los parámetros avanzados están en un panel opcional.
+        - Métricas: ve el rendimiento del modelo (Exactitud, Precisión, Recall, F1, ROC-AUC) y gráficas interpretables.
+        """
+    )
 
     st.markdown("#### ¿Qué puedo preguntar en el Chat?")
-    st.markdown('<div class="app-card">', unsafe_allow_html=True)
-    st.markdown("""
-    - "Tengo 45 años, saldo 1200, hipoteca sí, casado, contacto celular. ¿Qué probabilidad tengo?"
-    - "Soy soltero, 29 años, saldo 0, sin préstamos. ¿Me verías contratando?"
-    - "Trabajo en management, 50 años, hipoteca sí, préstamo no. ¿Sería un sí o no?"
-    """)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        - "Tengo 45 años, saldo 1200, hipoteca sí, casado, contacto celular. ¿Qué probabilidad tengo?"
+        - "Soy soltero, 29 años, saldo 0, sin préstamos. ¿Me verías contratando?"
+        - "Trabajo en management, 50 años, hipoteca sí, préstamo no. ¿Sería un sí o no?"
+        """
+    )
     st.info("Tip: puedes dar pocos datos y el sistema completa faltantes de forma segura.")
 
 
@@ -279,28 +348,26 @@ with tab_chat:
             st.session_state.pop("last_features", None)
             st.rerun()
 
-    # Contenedor visual con alto fijo y scroll interno
-    st.markdown("<div class='app-card chat-wrapper'>", unsafe_allow_html=True)
-
     if "messages" not in st.session_state:
         st.session_state.messages = [
             {"role": "assistant", "content": "Hola, cuéntame algunos datos (edad, saldo, hipoteca sí/no, estado civil…) y estimo tu probabilidad."}
         ]
 
-    # Render mensajes con burbujas alineadas (asistente izquierda, usuario derecha)
-    st.markdown("<div id='chat-scroll'>", unsafe_allow_html=True)
+    # Render de mensajes en un solo bloque HTML para evitar contenedores vacíos
+    msg_html_parts = ["<div class='chat-wrapper'><div id='chat-scroll'>"]
     for m in st.session_state.messages:
         role = m.get("role", "assistant")
-        content = m.get("content", "")
+        content = html.escape(m.get("content", ""))
         if role == "user":
-            c1, c2 = st.columns([0.35, 0.65])
-            with c2:
-                st.markdown(f"<div class='bubble user'>{content}</div>", unsafe_allow_html=True)
+            msg_html_parts.append(
+                f"<div style='display:flex; justify-content:flex-end;'><div class='bubble user'>{content}</div></div>"
+            )
         else:
-            c1, c2 = st.columns([0.65, 0.35])
-            with c1:
-                st.markdown(f"<div class='bubble assistant'>{content}</div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+            msg_html_parts.append(
+                f"<div style='display:flex; justify-content:flex-start;'><div class='bubble assistant'>{content}</div></div>"
+            )
+    msg_html_parts.append("</div></div>")
+    st.markdown("".join(msg_html_parts), unsafe_allow_html=True)
 
     # Input fijo abajo y centrado
     st.markdown("<div class='chat-input-area'>", unsafe_allow_html=True)
@@ -309,8 +376,6 @@ with tab_chat:
         with _cc:
             user_input = st.text_input("Escribe tu mensaje…", max_chars=400, label_visibility="collapsed")
             send = st.form_submit_button("Enviar", use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
     if send and user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
 
@@ -339,17 +404,12 @@ with tab_chat:
 
         st.session_state.messages.append({"role": "assistant", "content": reply})
 
-    st.markdown("</div>", unsafe_allow_html=True)
-
     # Feedback y reentrenamiento removidos de la UI para simplificar la experiencia
 
 
 with tab_form:
     st.subheader("Formulario de predicción")
     st.caption("Completa los datos clave. Puedes dejar campos vacíos: el modelo completará faltantes de forma segura.")
-
-    # Contenedor visual para el formulario
-    st.markdown("<div class='app-card'>", unsafe_allow_html=True)
 
     col1, col2 = st.columns(2)
 
@@ -436,7 +496,7 @@ with tab_form:
                 st.info(f"Es más probable que NO contrates (≈ {prob:.0%}).")
             st.caption(f"Modelo: {resp.get('model_version')} · Fecha: {str(resp.get('timestamp'))}")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    # Fin formulario
 
 
 with tab_metrics:
@@ -452,8 +512,6 @@ with tab_metrics:
             latest = history[0]
             m = latest.get("metrics", {})
 
-            # Resumen rápido en tarjeta
-            st.markdown("<div class='app-card'>", unsafe_allow_html=True)
             st.markdown("##### Resumen rápido")
             c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("Exactitud (Accuracy)", f"{m.get('accuracy', 0):.3f}")
@@ -470,11 +528,9 @@ with tab_metrics:
                     "- F1: equilibrio entre Precisión y Recall.\n"
                     "- ROC-AUC: capacidad del modelo para separar Sí/No (más alto es mejor)."
                 )
-            st.markdown("</div>", unsafe_allow_html=True)
 
             st.markdown("---")
-            # Gráficas en tarjeta
-            st.markdown("<div class='app-card'>", unsafe_allow_html=True)
+            # Gráficas
             gc1, gc2, gc3, gc4 = st.columns(4)
             with gc1:
                 draw_confusion_matrix(m.get("confusion_matrix", [[0,0],[0,0]]))
@@ -501,7 +557,6 @@ with tab_metrics:
                     st.line_chart(hist_df.set_index("version")[ ["accuracy","precision","recall","f1","roc_auc"] ])
             else:
                 st.info("La tendencia histórica aparece cuando existen al menos dos versiones (v1, v2, …).")
-            st.markdown("</div>", unsafe_allow_html=True)
 
 
 ## Pestaña de reentrenamiento eliminada para simplificar la interfaz
