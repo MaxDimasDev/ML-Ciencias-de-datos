@@ -42,3 +42,13 @@ class RetrainResponse(BaseModel):
     version: str
     created_at: datetime
     metrics: Metrics
+
+
+class FeedbackRequest(BaseModel):
+    features: Dict[str, Any]
+    y: int
+
+
+class FeedbackResponse(BaseModel):
+    accepted: bool
+    retrain_started: bool

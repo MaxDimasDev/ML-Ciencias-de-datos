@@ -62,6 +62,116 @@ def retrain(file_bytes: bytes | None):
         return None, str(e)
 
 
+def send_feedback(features: dict, y: int):
+    try:
+        r = requests.post(f"{API_BASE}/feedback", json={"features": features, "y": int(y)}, timeout=60)
+        r.raise_for_status()
+        return r.json(), None
+    except Exception as e:
+        return None, str(e)
+
+
+# --- Chatbot helpers ---
+YES_TOKENS = {"si", "sí", "yes", "y", "true"}
+NO_TOKENS = {"no", "false"}
+
+
+def _contains_any(text: str, words: set[str]) -> bool:
+    t = text.lower()
+    return any(w in t for w in words)
+
+
+def parse_text_to_features(text: str) -> dict:
+    """Parser simple en español/inglés para extraer features comunes.
+    Cubre un subconjunto; el modelo imputará el resto.
+    """
+    import re
+
+    t = text.lower()
+    feats: dict = {}
+
+    # Edad
+    m = re.search(r"(?:edad|age)\s*[:=]?\s*(\d{1,3})", t)
+    if m:
+        feats["age"] = int(m.group(1))
+
+    # Balance/Saldo
+    m = re.search(r"(?:saldo|balance)\s*[:=]?\s*(-?\d+)", t)
+    if m:
+        feats["balance"] = int(m.group(1))
+
+    # Estados binarios: housing, loan, default
+    if _contains_any(t, {"hipoteca", "vivienda", "housing", "casa"}):
+        feats["housing"] = "yes" if _contains_any(t, YES_TOKENS) else ("no" if _contains_any(t, NO_TOKENS) else "unknown")
+    if _contains_any(t, {"prestamo", "crédito", "loan"}):
+        feats["loan"] = "yes" if _contains_any(t, YES_TOKENS) else ("no" if _contains_any(t, NO_TOKENS) else "unknown")
+    if _contains_any(t, {"default", "mora", "incumplimiento"}):
+        feats["default"] = "yes" if _contains_any(t, YES_TOKENS) else ("no" if _contains_any(t, NO_TOKENS) else "unknown")
+
+    # Estado civil
+    if _contains_any(t, {"soltero", "single"}):
+        feats["marital"] = "single"
+    elif _contains_any(t, {"casado", "married"}):
+        feats["marital"] = "married"
+    elif _contains_any(t, {"divorciado", "divorced"}):
+        feats["marital"] = "divorced"
+
+    # Trabajo (mapa básico)
+    job_map = {
+        "administr": "admin.",
+        "blue": "blue-collar",
+        "empr": "entrepreneur",
+        "house": "housemaid",
+        "manage": "management",
+        "retir": "retired",
+        "self": "self-employed",
+        "serv": "services",
+        "student": "student",
+        "tech": "technician",
+        "unem": "unemployed",
+    }
+    for key, val in job_map.items():
+        if key in t:
+            feats["job"] = val
+            break
+
+    # Educación
+    edu_map = {
+        "univers": "university.degree",
+        "secund": "high.school",
+        "básic": "basic.9y",
+        "basica": "basic.9y",
+        "iliter": "illiterate",
+        "profes": "professional.course",
+    }
+    for key, val in edu_map.items():
+        if key in t:
+            feats["education"] = val
+            break
+
+    # Contacto
+    if _contains_any(t, {"celular", "móvil", "cellular", "mobile"}):
+        feats["contact"] = "cellular"
+    elif _contains_any(t, {"teléfono", "telefono", "telephone"}):
+        feats["contact"] = "telephone"
+
+    # Mes (abreviado en inglés)
+    months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"]
+    for mname in months:
+        if mname in t:
+            feats["month"] = mname
+            break
+
+    # Día del mes (day)
+    m = re.search(r"\b(?:day|día)\s*[:=]?\s*(\d{1,2})\b", t)
+    if m:
+        day = int(m.group(1))
+        if 1 <= day <= 31:
+            feats["day"] = day
+
+    return feats
+
+
 def section_header(title: str):
     st.markdown(f"### {title}")
 
@@ -112,7 +222,71 @@ def draw_y_dist(y_dist):
 st.title("Predicción de Contratación de Producto Bancario")
 st.caption("Modelo de Regresión Logística + API FastAPI + BD PostgreSQL")
 
-tab_pred, tab_metrics, tab_retrain = st.tabs(["Predicción", "Métricas", "Reentrenamiento"])
+tab_chat, tab_pred, tab_metrics, tab_retrain = st.tabs(["Chat", "Predicción", "Métricas", "Reentrenamiento"])
+
+
+with tab_chat:
+    st.subheader("Asistente tipo Chat")
+    st.caption("Escribe en lenguaje natural: 'Tengo 45 años, saldo 1200, hipoteca sí…' y te diré el riesgo.")
+
+    if "messages" not in st.session_state:
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Hola, cuéntame algunos datos (edad, saldo, hipoteca sí/no, estado civil…) y estimo tu probabilidad."}
+        ]
+
+    for m in st.session_state.messages:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+
+    user_input = st.chat_input("Escribe tu mensaje…")
+    if user_input:
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
+
+        # Parsear a features y predecir
+        feats = parse_text_to_features(user_input)
+        st.session_state.last_features = feats
+
+        with st.chat_message("assistant"):
+            with st.spinner("Analizando y consultando la API…"):
+                resp, err = predict(feats)
+            if err:
+                st.error(f"Error: {err}")
+                reply = "Hubo un error al consultar la API."
+            else:
+                prob = resp.get("probability", 0.0)
+                pred = resp.get("predicted", 0)
+                # Resumen de features detectadas
+                if feats:
+                    det = ", ".join([f"{k}={v}" for k, v in feats.items()])
+                    intro = f"Con lo que mencionaste ({det})"
+                else:
+                    intro = "Con información parcial (faltan datos, imputo valores por defecto)"
+                reply = f"{intro}, estimo probabilidad {prob:.1%} y predicción {pred}."
+                st.markdown(reply)
+            st.session_state.messages.append({"role": "assistant", "content": reply})
+
+    st.markdown("---")
+    st.markdown("#### Feedback (opcional)")
+    st.caption("Si conoces el resultado real, envíalo para mejorar el modelo. Esto puede disparar un reentrenamiento automático.")
+    colf1, colf2 = st.columns([2,1])
+    with colf1:
+        know = st.radio("¿El cliente finalmente contrató?", ["No", "Sí"], horizontal=True, key="fb_yesno")
+    with colf2:
+        send = st.button("Enviar feedback", use_container_width=True)
+    if send:
+        feats = st.session_state.get("last_features", {})
+        if not feats:
+            st.warning("Primero realiza una predicción en el chat para capturar los datos.")
+        else:
+            y_val = 1 if know == "Sí" else 0
+            with st.spinner("Enviando feedback a la API…"):
+                r, err = send_feedback(feats, y_val)
+            if err:
+                st.error(f"No se pudo enviar feedback: {err}")
+            else:
+                st.success("Feedback enviado. Gracias. El modelo puede reentrenarse en segundo plano.")
 
 
 with tab_pred:

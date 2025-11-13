@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 
-from .models import ModelVersion, Prediction
+from .models import ModelVersion, Prediction, LabeledExample
 
 
 def get_latest_model(db: Session) -> Optional[ModelVersion]:
@@ -51,3 +51,20 @@ def next_version(db: Session) -> str:
     if latest is None:
         return "v1"
     return f"v{int(latest) + 1}"
+
+
+# --- Labeled feedback ---
+def add_labeled_example(db: Session, *, features: Dict[str, Any], y: int) -> LabeledExample:
+    row = LabeledExample(features=features, y=int(y))
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def get_all_labeled_examples(db: Session) -> List[LabeledExample]:
+    return db.execute(select(LabeledExample).order_by(LabeledExample.created_at.asc())).scalars().all()
+
+
+def count_labeled_examples(db: Session) -> int:
+    return int(db.execute(select(func.count()).select_from(LabeledExample)).scalar() or 0)

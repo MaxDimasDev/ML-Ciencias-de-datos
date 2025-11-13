@@ -3,10 +3,10 @@ from __future__ import annotations
 import io
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import pandas as pd
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -18,7 +18,15 @@ from .ml import (
     dump_artifact,
     load_artifact,
 )
-from .schemas import PredictRequest, PredictResponse, MetricsHistoryResponse, RetrainResponse, ModelInfo
+from .schemas import (
+    PredictRequest,
+    PredictResponse,
+    MetricsHistoryResponse,
+    RetrainResponse,
+    ModelInfo,
+    FeedbackRequest,
+    FeedbackResponse,
+)
 
 
 app = FastAPI(title="Bank Marketing - Logistic Regression API")
@@ -48,6 +56,14 @@ def on_startup():
             crud.create_model_version(db, version=version, artifact=artifact, metrics=metrics)
     finally:
         db.close()
+
+
+# Auto-retrain settings (can be tuned via env vars)
+AUTO_RETRAIN = os.getenv("AUTO_RETRAIN", "true").lower() in {"1", "true", "yes", "y", "on"}
+try:
+    RETRAIN_MIN_FEEDBACK = int(os.getenv("RETRAIN_MIN_FEEDBACK", "1"))
+except Exception:
+    RETRAIN_MIN_FEEDBACK = 1
 
 
 @app.get("/health")
@@ -115,6 +131,53 @@ def predict(req: PredictRequest, db: Session = Depends(get_db)):
         timestamp=p.created_at,
         model_version=mv.version,
     )
+
+
+def _labeled_examples_to_df(examples: list[Dict[str, Any]]) -> pd.DataFrame:
+    if not examples:
+        return pd.DataFrame()
+    rows = []
+    for ex in examples:
+        # Expect keys: features (dict), y (int)
+        row = dict(ex["features"])  # shallow copy
+        row["y"] = int(ex["y"])
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _retrain_from_feedback_background():
+    db = SessionLocal()
+    try:
+        base_df = load_default_dataset()
+        # Fetch labeled examples and transform to DataFrame
+        labeled = crud.get_all_labeled_examples(db)
+        labeled_dicts = [{"features": r.features, "y": r.y} for r in labeled]
+        add_df = _labeled_examples_to_df(labeled_dicts)
+
+        pipe, metrics, _schema = train_and_evaluate(base_df, additional_df=add_df if not add_df.empty else None)
+        version = crud.next_version(db)
+        artifact = dump_artifact(pipe)
+        crud.create_model_version(db, version=version, artifact=artifact, metrics=metrics)
+    finally:
+        db.close()
+
+
+@app.post("/feedback", response_model=FeedbackResponse)
+def submit_feedback(payload: FeedbackRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    # Guardar ejemplo etiquetado
+    crud.add_labeled_example(db, features=payload.features, y=int(payload.y))
+
+    retrain_started = False
+    if AUTO_RETRAIN:
+        try:
+            total = crud.count_labeled_examples(db)
+            if RETRAIN_MIN_FEEDBACK <= 1 or (total % max(1, RETRAIN_MIN_FEEDBACK) == 0):
+                background_tasks.add_task(_retrain_from_feedback_background)
+                retrain_started = True
+        except Exception:
+            retrain_started = False
+
+    return FeedbackResponse(accepted=True, retrain_started=retrain_started)
 
 
 @app.get("/metrics", response_model=MetricsHistoryResponse)

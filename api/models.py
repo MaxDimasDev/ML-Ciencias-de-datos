@@ -36,3 +36,14 @@ class Prediction(Base):
 
     model_id = Column(Integer, ForeignKey("model_versions.id"), nullable=False)
     model = relationship("ModelVersion", back_populates="predictions")
+
+
+class LabeledExample(Base):
+    __tablename__ = "labeled_examples"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Características originales usadas en la predicción/entrada
+    features = Column(_json_type(), nullable=False)
+    # Etiqueta real del resultado (0/1)
+    y = Column(Integer, nullable=False)

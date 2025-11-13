@@ -72,8 +72,13 @@ def _prepare_dataframe(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
     if "duration" in df.columns:
         df = df.drop(columns=["duration"])
 
-    # Target y => {"yes":1, "no":0}
-    y = df["y"].map({"yes": 1, "no": 0}).astype(int)
+    # Target y can come as {yes/no}, {"1"/"0"} or {1/0}
+    y_raw = df["y"]
+    if y_raw.dtype == object:
+        y_norm = y_raw.astype(str).str.lower().str.strip()
+        y = y_norm.map({"yes": 1, "no": 0, "1": 1, "0": 0}).astype(int)
+    else:
+        y = pd.to_numeric(y_raw, errors="coerce").fillna(0).astype(int)
     X = df.drop(columns=["y"]).copy()
     return X, y
 

@@ -6,6 +6,7 @@ Este proyecto implementa un sistema completo de ML para predecir si un cliente c
 - Modelo de Regresión Logística con `scikit-learn`, pipeline y métricas almacenadas.
 - Base de datos PostgreSQL para predicciones, métricas y versiones del modelo.
 - Dashboard web en Streamlit para ingresar datos, ver métricas y reentrenar.
+ - Dashboard web en Streamlit para ingresar datos, modo Chat asistente, ver métricas y reentrenar.
 - Listo para despliegue gratuito: API en Render, BD en Neon, Dashboard en Streamlit Community Cloud.
 
 ## Estructura
@@ -15,7 +16,7 @@ Este proyecto implementa un sistema completo de ML para predecir si un cliente c
 ├── api/
 │   ├── main.py          # Entrypoint FastAPI
 │   ├── db.py            # Conexión SQLAlchemy
-│   ├── models.py        # Tablas: model_versions, predictions
+│   ├── models.py        # Tablas: model_versions, predictions, labeled_examples
 │   ├── crud.py          # Operaciones DB
 │   ├── schemas.py       # Pydantic schemas
 │   └── ml.py            # Entrenamiento, métricas y serialización
@@ -36,6 +37,8 @@ Este proyecto implementa un sistema completo de ML para predecir si un cliente c
 - Crea un archivo `.env` (no se versiona) a partir de `.env.example` y define al menos:
   - `DATABASE_URL` → cadena de conexión Postgres (por ejemplo, Neon) con `sslmode=require`.
   - `BANK_DATASET_PATH` (opcional) → ruta a un CSV local; si se omite, la API descargará el dataset UCI automáticamente.
+  - `AUTO_RETRAIN` (opcional) → `true/false`. Si true, la API reentrena en background con feedback etiquetado.
+  - `RETRAIN_MIN_FEEDBACK` (opcional) → entero N; reentrena cada N feedbacks (por defecto 1).
   - `API_BASE_URL` (para el dashboard, si no usas localhost).
 - El Dashboard en Streamlit Community Cloud debe usar `Secrets` y definir `API_BASE_URL` ahí.
 - Los datasets locales `bank-full.csv` y `bank-additional-full.csv` están ignorados por `.gitignore` para evitar subirlos al repo.
@@ -105,7 +108,7 @@ streamlit run dashboard/app.py
 
 2) Predicción (dashboard → API): el usuario ingresa datos, el dashboard envía JSON a la API, la API carga el modelo más reciente, predice, devuelve probabilidad y guarda el registro en la tabla `predictions` con timestamp y versión.
 
-3) Reentrenamiento: el dashboard permite subir un CSV etiquetado (con columna `y`). La API reentrena con datos históricos + nuevos, guarda nueva versión y métricas. Si no se sube CSV, reentrena con el dataset base.
+3) Reentrenamiento: el dashboard permite subir un CSV etiquetado (con columna `y`) y ahora también enviar feedback por ejemplo individual desde el Chat. La API reentrena automáticamente en segundo plano cuando se alcanza el umbral `RETRAIN_MIN_FEEDBACK` o inmediatamente si vale 1.
 
 ## Endpoints (resumen)
 
@@ -114,12 +117,14 @@ streamlit run dashboard/app.py
 - `POST /predict` → body `{ "features": { ... } }` → probabilidad, predicción, timestamp, versión
 - `GET /metrics?limit=5` → historial de métricas por versión
 - `POST /retrain` → `multipart/form-data` con `labeled_csv` opcional
+- `POST /feedback` → body `{ "features": { ... }, "y": 0|1 }` → guarda ejemplo etiquetado y puede disparar reentrenamiento en background
 
-## Métricas y Gráficas en Dashboard
+## Dashboard: Predicción, Chat y Métricas
 
 - Accuracy, Precision, Recall, F1, ROC-AUC, (PR-AUC), Matriz de confusión
 - Curva ROC, Curva Precision-Recall, Distribución de `y`
 - Tendencia histórica por versión (líneas)
+ - Pestaña "Chat": escribe en lenguaje natural (p. ej., "Tengo 45 años, saldo 1200, hipoteca sí"), el sistema extrae rasgos básicos y predice. Puedes enviar feedback del resultado real para mejorar el modelo.
 
 ## Notas
 
