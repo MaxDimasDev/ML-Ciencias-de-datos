@@ -15,6 +15,18 @@ class PredictResponse(BaseModel):
     model_version: str
 
 
+class PredictOption(BaseModel):
+    predicted: int
+    probability: float
+    model: str
+
+
+class PredictBothResponse(BaseModel):
+    classic: PredictOption
+    deep: PredictOption
+    timestamp: datetime
+
+
 class Metrics(BaseModel):
     accuracy: float
     precision: float
@@ -26,6 +38,8 @@ class Metrics(BaseModel):
     y_distribution: Dict[str, int]
     roc_curve: Dict[str, List[float]]
     pr_curve: Dict[str, List[float]]
+    model_type: str | None = None
+    schema: Dict[str, Any] | None = None
 
 
 class ModelInfo(BaseModel):

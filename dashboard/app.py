@@ -138,9 +138,18 @@ def get_metrics(limit: int = 10):
         return {"error": str(e)}
 
 
-def predict(features: dict):
+def predict_rl(features: dict):
     try:
-        r = requests.post(f"{API_BASE}/predict", json={"features": features}, timeout=30)
+        r = requests.post(f"{API_BASE}/predict_rl", json={"features": features}, timeout=30)
+        r.raise_for_status()
+        return r.json(), None
+    except Exception as e:
+        return None, str(e)
+
+
+def predict_dl(features: dict):
+    try:
+        r = requests.post(f"{API_BASE}/predict_dl", json={"features": features}, timeout=30)
         r.raise_for_status()
         return r.json(), None
     except Exception as e:
@@ -362,11 +371,18 @@ with tab_home:
 
 
 with tab_chat:
-    st.subheader("Asistente tipo Chat")
-    top_l, top_r = st.columns([0.85, 0.15])
-    with top_l:
+    hdr_l, hdr_c, hdr_r = st.columns([0.7, 0.15, 0.15])
+    with hdr_l:
+        st.subheader("Asistente tipo Chat")
         st.markdown("<div class='muted'>Chatea en español y obtén una estimación clara.</div>", unsafe_allow_html=True)
-    with top_r:
+    with hdr_c:
+        use_dl_chat = st.toggle(
+            "Usar Deep Learning",
+            value=(st.session_state.get("backend_choice_chat", "RL") == "DL"),
+            key="use_dl_chat",
+        )
+        st.session_state["backend_choice_chat"] = "DL" if use_dl_chat else "RL"
+    with hdr_r:
         if st.button("Limpiar chat"):
             st.session_state.pop("messages", None)
             st.session_state.pop("last_features", None)
@@ -404,11 +420,16 @@ with tab_chat:
         st.session_state.last_features = feats
 
         with st.spinner("Analizando y consultando la API…"):
-            resp, err = predict(feats)
+            use_rl = st.session_state.get("backend_choice_chat", "RL") == "RL"
+            if use_rl:
+                resp, err = predict_rl(feats)
+            else:
+                resp, err = predict_dl(feats)
         if err:
             st.error(f"Error: {err}")
             reply = "Hubo un error al consultar la API."
         else:
+            use_rl = st.session_state.get("backend_choice_chat", "RL") == "RL"
             prob = float(resp.get("probability", 0.0))
             pred = int(resp.get("predicted", 0))
             if feats:
@@ -423,8 +444,8 @@ with tab_chat:
                 reply += " Nota: la probabilidad está cerca del 50%, la confianza es moderada."
 
         meta = {
-            "endpoint": f"{API_BASE}/predict",
-            "request": {"features": feats},
+            "endpoint": f"{API_BASE}/{'predict_rl' if st.session_state.get('backend_choice_chat','RL')=='RL' else 'predict_dl'}",
+            "request": {"features": feats, "backend": st.session_state.get("backend_choice_chat", "RL")},
             "response": resp or {},
         }
         st.session_state.messages.append({"role": "assistant", "content": reply, "meta": meta})
@@ -434,8 +455,17 @@ with tab_chat:
 
 
 with tab_form:
-    st.subheader("Formulario de predicción")
-    st.caption("Completa los datos clave. Puedes dejar campos vacíos: el modelo completará faltantes de forma segura.")
+    head_l, head_r = st.columns([0.85, 0.15])
+    with head_l:
+        st.subheader("Formulario de predicción")
+        st.caption("Completa los datos clave. Puedes dejar campos vacíos: el modelo completará faltantes de forma segura.")
+    with head_r:
+        use_dl_form = st.toggle(
+            "Usar Deep Learning",
+            value=(st.session_state.get("backend_choice_form", "RL") == "DL"),
+            key="use_dl_form",
+        )
+        st.session_state["backend_choice_form"] = "DL" if use_dl_form else "RL"
 
     col1, col2 = st.columns(2)
 
@@ -509,25 +539,29 @@ with tab_form:
 
     if st.button("Calcular probabilidad", type="primary"):
         with st.spinner("Consultando a la API..."):
-            resp, err = predict(features)
+            use_rl = st.session_state.get("backend_choice_form", "RL") == "RL"
+            if use_rl:
+                resp, err = predict_rl(features)
+            else:
+                resp, err = predict_dl(features)
         if err:
             st.error(f"Error en la predicción: {err}")
         elif resp:
+            use_rl = st.session_state.get("backend_choice_form", "RL") == "RL"
             prob = float(resp.get("probability", 0.0))
             pred = int(resp.get("predicted", 0))
-            resultado = "SÍ" if pred == 1 else "NO"
+            nombre = "Clásico" if use_rl else "Deep Learning"
             if pred == 1:
-                st.success(f"Es probable que SÍ contrates (≈ {prob:.0%}).")
+                st.success(f"{nombre}: SÍ (≈ {prob:.0%}).")
             else:
-                st.info(f"Es más probable que NO contrates (≈ {prob:.0%}).")
-            st.caption(f"Modelo: {resp.get('model_version')} · Fecha: {str(resp.get('timestamp'))}")
+                st.info(f"{nombre}: NO (≈ {prob:.0%}).")
+            st.caption(f"Fecha: {str(resp.get('timestamp'))}")
 
-            # Detalles técnicos
             with st.expander("Ver más"):
                 st.markdown("**Endpoint**")
-                st.code(f"{API_BASE}/predict")
+                st.code(f"{API_BASE}/{'predict_rl' if use_rl else 'predict_dl'}")
                 st.markdown("**JSON enviado**")
-                st.json({"features": features})
+                st.json({"features": features, "backend": st.session_state.get("backend_choice_form", "RL")})
                 st.markdown("**Respuesta de la API**")
                 st.json(resp)
 
@@ -607,11 +641,12 @@ with tab_metrics:
             for h in history:
                 m_h = h.get("metrics", {})
                 cm = m_h.get("confusion_matrix", [[0, 0], [0, 0]])
-                # Representación compacta de la matriz de confusión
                 cm_str = f"{cm[0][0]},{cm[0][1]} · {cm[1][0]},{cm[1][1]}"
+                tipo = m_h.get("model_type")
+                modelo = "Deep Learning" if str(tipo).lower() in {"mlp", "torch", "pytorch"} else "Regresión Logística"
                 hist_rows.append({
                     "timestamp": h.get("created_at"),
-                    "modelo": "Regresión Logística",
+                    "modelo": modelo,
                     "version": h.get("version"),
                     "accuracy": m_h.get("accuracy"),
                     "precision": m_h.get("precision"),
@@ -623,7 +658,13 @@ with tab_metrics:
             if hist_df.empty:
                 st.info("Aún no hay historial. Envía una predicción y pulsa ‘Actualizar métricas’.")
             else:
-                st.dataframe(hist_df, use_container_width=True)
+                tab_all, tab_rl, tab_dl = st.tabs(["Todos", "RL", "DL"])
+                with tab_all:
+                    st.dataframe(hist_df, use_container_width=True)
+                with tab_rl:
+                    st.dataframe(hist_df[hist_df["modelo"] == "Regresión Logística"], use_container_width=True)
+                with tab_dl:
+                    st.dataframe(hist_df[hist_df["modelo"] == "Deep Learning"], use_container_width=True)
 
                 with st.expander("¿Cómo leer el progreso por reentrenado?"):
                     st.markdown(

@@ -13,3 +13,5 @@ matplotlib>=3.8
 seaborn>=0.13
 streamlit>=1.31
 python-dotenv>=1.0
+torch>=2.2; platform_system != "Darwin" or platform_machine != "arm64"
+skorch>=0.15

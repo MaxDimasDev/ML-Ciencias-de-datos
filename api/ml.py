@@ -52,8 +52,8 @@ def _load_local_dataset_if_available() -> pd.DataFrame | None:
     # Buscar en la raíz del proyecto
     base_dir = os.path.dirname(os.path.dirname(__file__))
     candidates.extend([
-        os.path.join(base_dir, "bank-full.csv"),
         os.path.join(base_dir, "bank-additional-full.csv"),
+        os.path.join(base_dir, "bank-full.csv"),
     ])
 
     for path in candidates:
@@ -84,9 +84,15 @@ def _prepare_dataframe(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
     return X, y
 
 
-def _build_pipeline(X: pd.DataFrame) -> Tuple[Pipeline, Dict[str, Any]]:
+def _build_pipeline(X: pd.DataFrame, model_type: str | None = None) -> Tuple[Pipeline, Dict[str, Any]]:
     cat_cols = X.select_dtypes(include=["object"]).columns.tolist()
     num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+
+    model_type = (model_type or os.getenv("MODEL_TYPE", "logreg")).lower()
+
+    use_mlp = model_type in {"mlp", "torch", "pytorch"}
+
+    onehot = OneHotEncoder(handle_unknown="ignore", sparse_output=(not use_mlp))
 
     transformers = []
     if cat_cols:
@@ -96,7 +102,7 @@ def _build_pipeline(X: pd.DataFrame) -> Tuple[Pipeline, Dict[str, Any]]:
                 Pipeline(
                     steps=[
                         ("imputer", SimpleImputer(strategy="most_frequent")),
-                        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+                        ("onehot", onehot),
                     ]
                 ),
                 cat_cols,
@@ -118,7 +124,55 @@ def _build_pipeline(X: pd.DataFrame) -> Tuple[Pipeline, Dict[str, Any]]:
 
     preprocessor = ColumnTransformer(transformers=transformers, remainder="drop")
 
-    clf = LogisticRegression(max_iter=200, class_weight="balanced")
+    clf: Any
+    if use_mlp:
+        try:
+            import torch
+            import torch.nn as nn
+            from skorch import NeuralNetBinaryClassifier
+
+            class MLP(nn.Module):
+                def __init__(self, hidden_dims=(128, 64), dropout=0.1):
+                    super().__init__()
+                    self.net = nn.Sequential(
+                        nn.LazyLinear(hidden_dims[0]),
+                        nn.ReLU(),
+                        nn.Dropout(dropout),
+                        nn.Linear(hidden_dims[0], hidden_dims[1]),
+                        nn.ReLU(),
+                        nn.Dropout(dropout),
+                        nn.Linear(hidden_dims[1], 1),
+                    )
+
+                def forward(self, x):
+                    return self.net(x.float())
+
+            hidden_str = os.getenv("MODEL_MLP_HIDDEN", "128,64")
+            try:
+                hidden_dims = tuple(int(h) for h in hidden_str.split(",") if h)
+            except Exception:
+                hidden_dims = (128, 64)
+            dropout = float(os.getenv("MODEL_MLP_DROPOUT", "0.1"))
+            max_epochs = int(os.getenv("MODEL_MLP_MAX_EPOCHS", "20"))
+            lr = float(os.getenv("MODEL_MLP_LR", "0.001"))
+
+            clf = NeuralNetBinaryClassifier(
+                module=MLP,
+                module__hidden_dims=hidden_dims,
+                module__dropout=dropout,
+                criterion=nn.BCEWithLogitsLoss,
+                optimizer=torch.optim.Adam,
+                lr=lr,
+                max_epochs=max_epochs,
+                train_split=None,
+                iterator_train__shuffle=True,
+                verbose=0,
+                device="cpu",
+            )
+        except Exception:
+            clf = LogisticRegression(max_iter=200, class_weight="balanced")
+    else:
+        clf = LogisticRegression(max_iter=200, class_weight="balanced")
 
     pipe = Pipeline(steps=[("preprocess", preprocessor), ("clf", clf)])
 
@@ -130,22 +184,29 @@ def _build_pipeline(X: pd.DataFrame) -> Tuple[Pipeline, Dict[str, Any]]:
     return pipe, schema
 
 
-def train_and_evaluate(base_df: pd.DataFrame, additional_df: pd.DataFrame | None = None) -> Tuple[Pipeline, Dict[str, Any], Dict[str, Any]]:
+def train_and_evaluate(base_df: pd.DataFrame, additional_df: pd.DataFrame | None = None, model_type: str | None = None) -> Tuple[Pipeline, Dict[str, Any], Dict[str, Any]]:
     if additional_df is not None and not additional_df.empty:
         # Expect same columns and target y
         base_df = pd.concat([base_df, additional_df], axis=0, ignore_index=True)
 
     X, y = _prepare_dataframe(base_df)
-    pipe, schema = _build_pipeline(X)
+    pipe, schema = _build_pipeline(X, model_type=model_type)
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
+    if (model_type or os.getenv("MODEL_TYPE", "logreg")).lower() in {"mlp", "torch", "pytorch"}:
+        y_train = y_train.astype(np.float32)
+
     pipe.fit(X_train, y_train)
 
     y_pred = pipe.predict(X_test)
-    y_proba = pipe.predict_proba(X_test)[:, 1]
+    _proba = pipe.predict_proba(X_test)
+    if hasattr(_proba, "shape") and len(getattr(_proba, "shape", ())) == 2 and _proba.shape[1] >= 2:
+        y_proba = _proba[:, 1]
+    else:
+        y_proba = np.array(_proba).reshape(-1)
 
     acc = accuracy_score(y_test, y_pred)
     prec = precision_score(y_test, y_pred, zero_division=0)

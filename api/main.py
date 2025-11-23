@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 
 import pandas as pd
+import numpy as np
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -22,6 +23,8 @@ from .data_mining import collect_training_data
 from .schemas import (
     PredictRequest,
     PredictResponse,
+    PredictBothResponse,
+    PredictOption,
     MetricsHistoryResponse,
     RetrainResponse,
     ModelInfo,
@@ -31,6 +34,35 @@ from .schemas import (
 
 
 app = FastAPI(title="Bank Marketing - Logistic Regression API")
+
+PIPE_LOGREG = None
+PIPE_MLP = None
+SCHEMA_FOR_BOTH = None
+ALL_CAT_COLS = [
+    "job",
+    "marital",
+    "education",
+    "default",
+    "housing",
+    "loan",
+    "contact",
+    "month",
+    "day_of_week",
+    "poutcome",
+]
+ALL_NUM_COLS = [
+    "age",
+    "balance",
+    "day",
+    "campaign",
+    "pdays",
+    "previous",
+    "emp.var.rate",
+    "cons.price.idx",
+    "cons.conf.idx",
+    "euribor3m",
+    "nr.employed",
+]
 
 app.add_middleware(
     CORSMiddleware,
@@ -50,12 +82,27 @@ def on_startup():
     try:
         latest = crud.get_latest_model(db)
         if latest is None:
-            # Minado de datos: construir dataset desde fuente externa (SQL/HTTP)
-            base_df = collect_training_data()
+            try:
+                base_df = collect_training_data()
+            except Exception:
+                base_df = load_default_dataset()
             pipe, metrics, _schema = train_and_evaluate(base_df)
             version = crud.next_version(db)
             artifact = dump_artifact(pipe)
             crud.create_model_version(db, version=version, artifact=artifact, metrics=metrics)
+
+        try:
+            try:
+                df = collect_training_data()
+            except Exception:
+                df = load_default_dataset()
+            pipe_lr, metrics_lr, schema_lr = train_and_evaluate(df, model_type="logreg")
+            pipe_mlp, metrics_mlp, schema_mlp = train_and_evaluate(df, model_type="mlp")
+            globals()["PIPE_LOGREG"] = pipe_lr
+            globals()["PIPE_MLP"] = pipe_mlp
+            globals()["SCHEMA_FOR_BOTH"] = schema_lr or schema_mlp
+        except Exception:
+            pass
     finally:
         db.close()
 
@@ -87,47 +134,105 @@ def model_latest(db: Session = Depends(get_db)):
     }
 
 
-@app.post("/predict", response_model=PredictResponse)
-def predict(req: PredictRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    mv = crud.get_latest_model(db)
-    if mv is None:
-        raise HTTPException(status_code=500, detail="Model not available")
-    pipe = load_artifact(mv.artifact)
+@app.post("/predict_rl", response_model=PredictResponse)
+def predict_rl(req: PredictRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    pipe = PIPE_LOGREG
+    if pipe is None:
+        raise HTTPException(status_code=500, detail="Classic model not initialized")
 
-    # Build single-row DataFrame with potential missing columns
-    X_in = pd.DataFrame([req.features])
-
-    # Ensure all expected columns exist (based on stored schema)
-    schema = (mv.metrics or {}).get("schema", {})
-    cat_cols = schema.get("categorical", [])
-    num_cols = schema.get("numerical", [])
-    for col in cat_cols:
-        if col not in X_in.columns:
-            X_in[col] = "unknown"
-    for col in num_cols:
-        if col not in X_in.columns:
-            X_in[col] = 0
-
-    # Reorder columns to match training order (optional but safer)
-    all_cols = schema.get("all")
-    if all_cols:
-        X_in = X_in.reindex(columns=all_cols, fill_value=0)
+    # Derivar columnas esperadas y construir fila exacta
+    cat_cols: list[str] = []
+    num_cols: list[str] = []
+    required: list[str] = []
+    X_in = None
+    if hasattr(pipe, "named_steps"):
+        pre = pipe.named_steps.get("preprocess")
+        if pre is not None and hasattr(pre, "transformers_"):
+            for name, trans, cols in pre.transformers_:
+                cols = list(cols)
+                if name == "cat":
+                    cat_cols = cols
+                elif name == "num":
+                    num_cols = cols
+                required.extend(cols)
+    if not required:
+        if SCHEMA_FOR_BOTH:
+            cat_cols = list(SCHEMA_FOR_BOTH.get("categorical", []))
+            num_cols = list(SCHEMA_FOR_BOTH.get("numerical", []))
+            required = list(SCHEMA_FOR_BOTH.get("all", cat_cols + num_cols))
+        else:
+            cat_cols = list(ALL_CAT_COLS)
+            num_cols = list(ALL_NUM_COLS)
+            required = list(ALL_CAT_COLS + ALL_NUM_COLS)
+    row = {}
+    for c in required:
+        if c in cat_cols:
+            row[c] = req.features.get(c, "unknown")
+        else:
+            row[c] = req.features.get(c, 0)
+    X_in = pd.DataFrame([row], columns=required)
+    try:
+        print("[debug RL] required_cat", len(cat_cols), cat_cols[:5])
+        print("[debug RL] required_num", len(num_cols), num_cols[:5])
+        print("[debug RL] x_cols", len(list(X_in.columns)), list(X_in.columns)[:5])
+    except Exception:
+        pass
 
     # Predict
     try:
-        proba = float(pipe.predict_proba(X_in)[:, 1][0])
+        _proba = pipe.predict_proba(X_in)
+        if hasattr(_proba, "shape") and len(getattr(_proba, "shape", ())) == 2 and _proba.shape[1] >= 2:
+            proba = float(_proba[0, 1])
+        else:
+            proba = float(np.array(_proba).reshape(-1)[0])
         pred = int(1 if proba >= 0.5 else 0)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Prediction error: {e}")
+        msg = str(e)
+        try:
+            import re
+            m = re.search(r"missing:\s*\{([^}]*)\}", msg)
+            if m:
+                missing_raw = m.group(1)
+                missing = [s.strip().strip("'\"") for s in missing_raw.split(',') if s.strip()]
+                for col in missing:
+                    if col in cat_cols:
+                        X_in[col] = "unknown"
+                    else:
+                        X_in[col] = 0
+                all_cols2 = (cat_cols + num_cols) if (cat_cols or num_cols) else list(X_in.columns)
+                X_in = X_in.reindex(columns=all_cols2, fill_value=0)
+                _proba = pipe.predict_proba(X_in)
+                if hasattr(_proba, "shape") and len(getattr(_proba, "shape", ())) == 2 and _proba.shape[1] >= 2:
+                    proba = float(_proba[0, 1])
+                else:
+                    proba = float(np.array(_proba).reshape(-1)[0])
+                pred = int(1 if proba >= 0.5 else 0)
+            else:
+                raise
+        except Exception:
+            try:
+                dbg = {
+                    "cat_cols": cat_cols,
+                    "num_cols": num_cols,
+                    "x_cols": list(X_in.columns),
+                }
+                raise HTTPException(status_code=400, detail=f"Prediction error: {e}; dbg={dbg}")
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"Prediction error: {e}")
 
-    # Save prediction
-    p = crud.save_prediction(
-        db,
-        features=req.features,
-        predicted=pred,
-        probability=proba,
-        model=mv,
-    )
+    p = None
+    try:
+        mv = crud.get_latest_model(db)
+        if mv is not None:
+            p = crud.save_prediction(
+                db,
+                features=req.features,
+                predicted=pred,
+                probability=proba,
+                model=mv,
+            )
+    except Exception:
+        p = None
 
     # Guardar ejemplo etiquetado automáticamente con el resultado de la predicción
     try:
@@ -139,16 +244,15 @@ def predict(req: PredictRequest, background_tasks: BackgroundTasks, db: Session 
     # Disparar reentrenamiento en background si está habilitado
     if AUTO_RETRAIN_AFTER_PREDICTION:
         try:
-            print("[auto-retrain] Programando reentrenado en background tras predicción...")
-            background_tasks.add_task(_retrain_from_feedback_background)
+            background_tasks.add_task(_retrain_from_feedback_background, "logreg")
         except Exception:
             pass
 
     return PredictResponse(
         predicted=pred,
         probability=proba,
-        timestamp=p.created_at,
-        model_version=mv.version,
+        timestamp=(p.created_at if p else datetime.utcnow()),
+        model_version="logreg",
     )
 
 
@@ -164,25 +268,35 @@ def _labeled_examples_to_df(examples: list[Dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _retrain_from_feedback_background():
+def _retrain_from_feedback_background(model_type: str = "logreg"):
     print("[auto-retrain] Inicio de reentrenado en background")
     db = SessionLocal()
     try:
-        # Reentrenar a partir del dataset minado + ejemplos etiquetados (si existen)
         try:
             base_df = collect_training_data()
         except Exception as e:
             print(f"[auto-retrain] Error al minar datos de entrenamiento: {e}")
-            raise
-        # Fetch labeled examples and transform to DataFrame
+            try:
+                base_df = load_default_dataset()
+                print("[auto-retrain] Usando dataset por defecto para reentrenar")
+            except Exception:
+                raise
         labeled = crud.get_all_labeled_examples(db)
         labeled_dicts = [{"features": r.features, "y": r.y} for r in labeled]
         add_df = _labeled_examples_to_df(labeled_dicts)
 
-        pipe, metrics, _schema = train_and_evaluate(base_df, additional_df=add_df if not add_df.empty else None)
+        pipe, metrics, _schema = train_and_evaluate(base_df, additional_df=add_df if not add_df.empty else None, model_type=model_type)
+        metrics = dict(metrics)
+        metrics["model_type"] = model_type
         version = crud.next_version(db)
         artifact = dump_artifact(pipe)
         mv = crud.create_model_version(db, version=version, artifact=artifact, metrics=metrics)
+
+        if (model_type or "logreg").lower() in {"mlp", "torch", "pytorch"}:
+            globals()["PIPE_MLP"] = pipe
+        else:
+            globals()["PIPE_LOGREG"] = pipe
+
         print(f"[auto-retrain] Nueva versión creada: {mv.version}")
     finally:
         print("[auto-retrain] Fin de reentrenado en background")
@@ -255,3 +369,95 @@ def retrain(
     mv = crud.create_model_version(db, version=version, artifact=artifact, metrics=metrics)
 
     return RetrainResponse(version=mv.version, created_at=mv.created_at, metrics=mv.metrics)
+@app.post("/predict_dl", response_model=PredictResponse)
+def predict_dl(req: PredictRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    if PIPE_MLP is None:
+        raise HTTPException(status_code=500, detail="Deep model not initialized")
+
+    cat_cols: list[str] = []
+    num_cols: list[str] = []
+    required: list[str] = []
+    pre = PIPE_MLP.named_steps.get("preprocess") if hasattr(PIPE_MLP, "named_steps") else None
+    if pre is not None and hasattr(pre, "transformers_"):
+        for name, trans, cols in pre.transformers_:
+            cols = list(cols)
+            if name == "cat":
+                cat_cols = cols
+            elif name == "num":
+                num_cols = cols
+            required.extend(cols)
+    if not required:
+        if SCHEMA_FOR_BOTH:
+            cat_cols = list(SCHEMA_FOR_BOTH.get("categorical", []))
+            num_cols = list(SCHEMA_FOR_BOTH.get("numerical", []))
+            required = list(SCHEMA_FOR_BOTH.get("all", cat_cols + num_cols))
+        else:
+            cat_cols = list(ALL_CAT_COLS)
+            num_cols = list(ALL_NUM_COLS)
+            required = list(ALL_CAT_COLS + ALL_NUM_COLS)
+    row = {}
+    for c in required:
+        if c in cat_cols:
+            row[c] = req.features.get(c, "unknown")
+        else:
+            row[c] = req.features.get(c, 0)
+    X_in = pd.DataFrame([row], columns=required)
+
+    try:
+        proba_dl_raw = PIPE_MLP.predict_proba(X_in)
+        if hasattr(proba_dl_raw, "shape") and len(getattr(proba_dl_raw, "shape", ())) == 2 and proba_dl_raw.shape[1] >= 2:
+            proba = float(proba_dl_raw[0, 1])
+        else:
+            proba = float(np.array(proba_dl_raw).reshape(-1)[0])
+        pred = int(1 if proba >= 0.5 else 0)
+    except Exception as e:
+        msg = str(e)
+        try:
+            import re
+            m = re.search(r"missing:\s*\{([^}]*)\}", msg)
+            if m:
+                missing_raw = m.group(1)
+                missing = [s.strip().strip("'\"") for s in missing_raw.split(',') if s.strip()]
+                for col in missing:
+                    if col in cat_cols:
+                        X_in[col] = "unknown"
+                    else:
+                        X_in[col] = 0
+                all_cols2 = (cat_cols + num_cols) if (cat_cols or num_cols) else list(X_in.columns)
+                X_in = X_in.reindex(columns=all_cols2, fill_value=0)
+                proba_dl_raw = PIPE_MLP.predict_proba(X_in)
+                if hasattr(proba_dl_raw, "shape") and len(getattr(proba_dl_raw, "shape", ())) == 2 and proba_dl_raw.shape[1] >= 2:
+                    proba = float(proba_dl_raw[0, 1])
+                else:
+                    proba = float(np.array(proba_dl_raw).reshape(-1)[0])
+                pred = int(1 if proba >= 0.5 else 0)
+            else:
+                raise
+        except Exception:
+            try:
+                dbg = {
+                    "cat_cols": cat_cols,
+                    "num_cols": num_cols,
+                    "x_cols": list(X_in.columns),
+                }
+                raise HTTPException(status_code=400, detail=f"Prediction error: {e}; dbg={dbg}")
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"Prediction error: {e}")
+
+    try:
+        crud.add_labeled_example(db, features=req.features, y=int(pred))
+    except Exception:
+        pass
+
+    if AUTO_RETRAIN_AFTER_PREDICTION:
+        try:
+            background_tasks.add_task(_retrain_from_feedback_background, "mlp")
+        except Exception:
+            pass
+
+    return PredictResponse(
+        predicted=pred,
+        probability=proba,
+        timestamp=datetime.utcnow(),
+        model_version="mlp",
+    )

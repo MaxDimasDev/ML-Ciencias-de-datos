@@ -68,7 +68,8 @@ uvicorn api.main:app --reload
 ```
 
 - Salud: http://localhost:8000/health
-- Predicción: POST http://localhost:8000/predict
+- Predicción RL: POST http://localhost:8000/predict_rl
+- Predicción DL: POST http://localhost:8000/predict_dl
 - Métricas: GET http://localhost:8000/metrics
 
 4) Levantar el dashboard (requiere `API_BASE_URL` si la API no está en localhost):
@@ -105,18 +106,19 @@ streamlit run dashboard/app.py
 
 ## Flujo del Sistema
 
-1) Entrenamiento inicial (minado de datos): al iniciar la API, ejecuta la consulta SQL o la URL/ruta que definas y obtiene un dataset con columnas de entrada y la etiqueta `y`. El minado normaliza algunos campos (p. ej. sí/no, meses abreviados, categorías en español) y el pipeline de ML descarta `duration` (leakage) y normaliza `y`. Se entrena una Regresión Logística con `OneHotEncoder(handle_unknown="ignore")` + `StandardScaler` y se almacenan métricas y la versión `vN` del modelo (artifact binario + métricas JSON).
+1) Entrenamiento inicial (minado de datos): al iniciar la API, ejecuta la consulta SQL o la URL/ruta que definas y obtiene un dataset con columnas de entrada y la etiqueta `y`. El minado normaliza algunos campos (p. ej. sí/no, meses abreviados, categorías en español) y el pipeline de ML descarta `duration` (leakage) y normaliza `y`. Se entrenan dos pipelines: Regresión Logística (RL) y Deep Learning MLP (DL), ambos con `OneHotEncoder(handle_unknown="ignore")` + `StandardScaler`. Se almacenan métricas y versiones `vN`.
 
-2) Predicción (dashboard → API): el usuario ingresa datos, el dashboard envía JSON a la API (`POST /predict`). La API carga el modelo más reciente, predice, devuelve probabilidad y guarda el registro en la tabla `predictions` con timestamp y versión. Adicionalmente, guarda un ejemplo etiquetado con `y=pred` y, si `AUTO_RETRAIN_AFTER_PREDICTION=true`, programa un reentrenado en background que crea una nueva versión si hay cambios.
+2) Predicción (dashboard → API): el usuario ingresa datos y elige RL o DL en el dashboard. La API recibe `POST /predict_rl` o `POST /predict_dl`, predice y devuelve probabilidad. Se guarda la predicción (RL) y se añade un ejemplo etiquetado (`y=pred`) para ambos. Si `AUTO_RETRAIN_AFTER_PREDICTION=true`, se reentrena en background el backend usado (RL o DL) y se crea una nueva versión con sus métricas.
 
 3) Interacción: desde el dashboard puedes usar el modo Chat (texto libre) o el Formulario (campos en español con ayudas) para consultar una probabilidad de contratación clara (SÍ/NO + porcentaje). No se muestra “predicción 0/1”.
 
 ## Endpoints (resumen)
 
 - `GET /health` → estado del servicio
-- `GET /model/latest` → versión y métricas del modelo de producción
-- `POST /predict` → body `{ "features": { ... } }` → probabilidad, predicción, timestamp, versión
-- `GET /metrics?limit=5` → historial de métricas por versión
+- `GET /model/latest` → versión y métricas del último modelo
+- `POST /predict_rl` → body `{ "features": { ... } }` → probabilidad, predicción, timestamp, versión (RL)
+- `POST /predict_dl` → body `{ "features": { ... } }` → probabilidad, predicción, timestamp, versión (DL)
+- `GET /metrics?limit=5` → historial de métricas por versión (incluye `model_type: rl|mlp`)
  - `POST /feedback` → guarda ejemplo etiquetado `{features, y}` para reentrenos manuales
  - `POST /retrain` → reentrena a partir del dataset base y CSV opcional (con `y`)
 
@@ -125,15 +127,15 @@ streamlit run dashboard/app.py
 - Accuracy, Precision, Recall, F1, ROC-AUC, (PR-AUC), Matriz de confusión
 - Curva ROC, Curva Precision-Recall, Distribución de `y`
 - Tendencia histórica por versión (líneas)
-- Pestaña "Chat": escribe en lenguaje natural (p. ej., "Tengo 45 años, saldo 1200, hipoteca sí"). El asistente responde en lenguaje claro: “Es probable que SÍ/NO contrates (≈ 78%)”. Incluye un panel "Ver más" con el endpoint, el JSON enviado y la respuesta.
-- Pestaña "Formulario": campos en español con instrucciones (“Ingresa tu edad”, “¿Tienes hipoteca?”). Los parámetros avanzados están ocultos en un panel opcional. Incluye un panel "Ver más" con el endpoint, el JSON y la respuesta.
-- Pestaña "Métricas": botón "Actualizar métricas" para refrescar cache y ver la última versión creada.
+- Pestaña "Chat": escribe en lenguaje natural (p. ej., "Tengo 45 años, saldo 1200, hipoteca sí"). Un toggle "Usar Deep Learning" permite alternar entre RL y DL. El asistente responde en lenguaje claro: “Es probable que SÍ/NO contrates (≈ 78%)”. Incluye un panel "Ver más" con el endpoint usado (`/predict_rl` o `/predict_dl`), el JSON enviado y la respuesta.
+- Pestaña "Formulario": campos en español con instrucciones (“Ingresa tu edad”, “¿Tienes hipoteca?”). Un toggle "Usar Deep Learning" alterna RL/DL. Incluye un panel "Ver más" con el endpoint, el JSON y la respuesta.
+- Pestaña "Métricas": botón "Actualizar métricas" para refrescar y una tabla histórica con pestañas “Todos”, “RL”, “DL” que permite distinguir el backend (`metrics.model_type`).
 
 ## Notas
 
 - La API por defecto permite CORS `*` para facilidad de demo.
 - El pipeline maneja categorías desconocidas y realiza escalado en numéricos.
- - El auto-reentrenamiento tras predicción usa la propia predicción como etiqueta (`y=pred`) para bootstrap de versiones; en entornos reales se recomienda usar etiquetas humanas vía `/feedback` para evitar sesgos de auto-entrenamiento.
+- El auto-reentrenamiento tras predicción usa la propia predicción como etiqueta (`y=pred`) para bootstrap de versiones (tanto RL como DL); en entornos reales se recomienda usar etiquetas humanas vía `/feedback` para evitar sesgos de auto-entrenamiento.
 
 ## Diferencias vs documentación previa (DataSet.pdf)
 
