@@ -157,6 +157,37 @@ def on_startup():
                     except Exception:
                         pass
                 threading.Thread(target=_bg, daemon=True).start()
+            # Cold‑start: si aún no hay MLP, inicializar uno ligero para evitar 503
+            if globals()["PIPE_MLP"] is None:
+                try:
+                    cs = int(os.getenv("MLP_COLD_START_SAMPLE", "500"))
+                except Exception:
+                    cs = 500
+                df_cs = df.sample(n=min(cs, len(df)), random_state=42) if len(df) > cs else df
+                prev_svd = os.getenv("MODEL_MLP_SVD_COMPONENTS")
+                prev_ep = os.getenv("MODEL_MLP_MAX_EPOCHS")
+                prev_hid = os.getenv("MODEL_MLP_HIDDEN")
+                os.environ["MODEL_MLP_SVD_COMPONENTS"] = "32"
+                os.environ["MODEL_MLP_MAX_EPOCHS"] = "1"
+                os.environ["MODEL_MLP_HIDDEN"] = "32,16"
+                try:
+                    pipe_mlp_cs, _, _ = train_and_evaluate(df_cs, model_type="mlp")
+                    globals()["PIPE_MLP"] = pipe_mlp_cs
+                except Exception:
+                    pass
+                finally:
+                    if prev_svd is not None:
+                        os.environ["MODEL_MLP_SVD_COMPONENTS"] = prev_svd
+                    else:
+                        os.environ.pop("MODEL_MLP_SVD_COMPONENTS", None)
+                    if prev_ep is not None:
+                        os.environ["MODEL_MLP_MAX_EPOCHS"] = prev_ep
+                    else:
+                        os.environ.pop("MODEL_MLP_MAX_EPOCHS", None)
+                    if prev_hid is not None:
+                        os.environ["MODEL_MLP_HIDDEN"] = prev_hid
+                    else:
+                        os.environ.pop("MODEL_MLP_HIDDEN", None)
         except Exception:
             pass
     finally:
