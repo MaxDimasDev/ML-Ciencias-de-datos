@@ -14,6 +14,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
+from sklearn.decomposition import TruncatedSVD
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     accuracy_score,
@@ -92,7 +93,7 @@ def _build_pipeline(X: pd.DataFrame, model_type: str | None = None) -> Tuple[Pip
 
     use_mlp = model_type in {"mlp", "torch", "pytorch"}
 
-    onehot = OneHotEncoder(handle_unknown="ignore", sparse_output=(not use_mlp))
+    onehot = OneHotEncoder(handle_unknown="ignore", sparse_output=True)
 
     transformers = []
     if cat_cols:
@@ -174,7 +175,15 @@ def _build_pipeline(X: pd.DataFrame, model_type: str | None = None) -> Tuple[Pip
     else:
         clf = LogisticRegression(max_iter=200, class_weight="balanced")
 
-    pipe = Pipeline(steps=[("preprocess", preprocessor), ("clf", clf)])
+    steps = [("preprocess", preprocessor)]
+    if use_mlp:
+        try:
+            svd_components = int(os.getenv("MODEL_MLP_SVD_COMPONENTS", "128"))
+        except Exception:
+            svd_components = 128
+        steps.append(("svd", TruncatedSVD(n_components=svd_components, random_state=42)))
+    steps.append(("clf", clf))
+    pipe = Pipeline(steps=steps)
 
     schema = {
         "categorical": cat_cols,
