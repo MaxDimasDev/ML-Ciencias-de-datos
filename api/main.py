@@ -80,6 +80,31 @@ def on_startup():
     # Ensure at least one model exists
     db = SessionLocal()
     try:
+        # Intentar cargar modelos existentes desde la base (evita entrenar pesado en startup)
+        try:
+            hist = crud.get_metrics_history(db, limit=20)
+            for r in hist:
+                m = r.metrics or {}
+                t = str(m.get("model_type", "")).lower()
+                if t in {"mlp", "torch", "pytorch"} and globals()["PIPE_MLP"] is None:
+                    try:
+                        globals()["PIPE_MLP"] = load_artifact(r.artifact)
+                        globals()["SCHEMA_FOR_BOTH"] = globals()["SCHEMA_FOR_BOTH"] or m.get("schema")
+                        break
+                    except Exception:
+                        pass
+            for r in hist:
+                m = r.metrics or {}
+                t = str(m.get("model_type", "")).lower()
+                if t in {"logreg", "lr", "classic", "sklearn"} and globals()["PIPE_LOGREG"] is None:
+                    try:
+                        globals()["PIPE_LOGREG"] = load_artifact(r.artifact)
+                        globals()["SCHEMA_FOR_BOTH"] = globals()["SCHEMA_FOR_BOTH"] or m.get("schema")
+                        break
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         latest = crud.get_latest_model(db)
         if latest is None:
             try:
@@ -110,22 +135,25 @@ def on_startup():
                 sample_s = 2000
             if sample_s > 0 and len(df) > sample_s:
                 df = df.sample(n=sample_s, random_state=42)
-            pipe_lr, metrics_lr, schema_lr = train_and_evaluate(df, model_type="logreg")
-            globals()["PIPE_LOGREG"] = pipe_lr
-            globals()["SCHEMA_FOR_BOTH"] = schema_lr
+            if globals()["PIPE_LOGREG"] is None:
+                pipe_lr, metrics_lr, schema_lr = train_and_evaluate(df, model_type="logreg")
+                globals()["PIPE_LOGREG"] = pipe_lr
+                globals()["SCHEMA_FOR_BOTH"] = schema_lr
             if enable_mlp:
                 try:
-                    pipe_mlp, metrics_mlp, schema_mlp = train_and_evaluate(df, model_type="mlp")
-                    globals()["PIPE_MLP"] = pipe_mlp
-                    globals()["SCHEMA_FOR_BOTH"] = globals()["SCHEMA_FOR_BOTH"] or schema_mlp
+                    if globals()["PIPE_MLP"] is None:
+                        pipe_mlp, metrics_mlp, schema_mlp = train_and_evaluate(df, model_type="mlp")
+                        globals()["PIPE_MLP"] = pipe_mlp
+                        globals()["SCHEMA_FOR_BOTH"] = globals()["SCHEMA_FOR_BOTH"] or schema_mlp
                 except Exception:
                     pass
             elif enable_mlp_bg:
                 import threading
                 def _bg():
                     try:
-                        pipe_mlp, metrics_mlp, schema_mlp = train_and_evaluate(df, model_type="mlp")
-                        globals()["PIPE_MLP"] = pipe_mlp
+                        if globals()["PIPE_MLP"] is None:
+                            pipe_mlp, metrics_mlp, schema_mlp = train_and_evaluate(df, model_type="mlp")
+                            globals()["PIPE_MLP"] = pipe_mlp
                     except Exception:
                         pass
                 threading.Thread(target=_bg, daemon=True).start()
@@ -400,7 +428,7 @@ def retrain(
 @app.post("/predict_dl", response_model=PredictResponse)
 def predict_dl(req: PredictRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     if PIPE_MLP is None:
-        raise HTTPException(status_code=500, detail="Deep model not initialized")
+        raise HTTPException(status_code=503, detail="Deep model warming up; retry later")
 
     cat_cols: list[str] = []
     num_cols: list[str] = []
