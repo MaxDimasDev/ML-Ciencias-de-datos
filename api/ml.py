@@ -28,6 +28,28 @@ from sklearn.metrics import (
     average_precision_score,
 )
 
+try:
+    import torch
+    import torch.nn as nn
+
+    class TorchMLP(nn.Module):
+        def __init__(self, hidden_dims=(128, 64), dropout=0.1):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.LazyLinear(hidden_dims[0]),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dims[0], hidden_dims[1]),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dims[1], 1),
+            )
+
+        def forward(self, x):
+            return self.net(x.float())
+except Exception:
+    TorchMLP = None
+
 
 UCI_ZIP_URL = "https://archive.ics.uci.edu/ml/machine-learning-databases/00222/bank-additional.zip"
 CSV_PATH_IN_ZIP = "bank-additional/bank-additional-full.csv"
@@ -126,52 +148,30 @@ def _build_pipeline(X: pd.DataFrame, model_type: str | None = None) -> Tuple[Pip
     preprocessor = ColumnTransformer(transformers=transformers, remainder="drop")
 
     clf: Any
-    if use_mlp:
+    if use_mlp and TorchMLP is not None:
+        from skorch import NeuralNetBinaryClassifier
+        hidden_str = os.getenv("MODEL_MLP_HIDDEN", "128,64")
         try:
-            import torch
-            import torch.nn as nn
-            from skorch import NeuralNetBinaryClassifier
-
-            class MLP(nn.Module):
-                def __init__(self, hidden_dims=(128, 64), dropout=0.1):
-                    super().__init__()
-                    self.net = nn.Sequential(
-                        nn.LazyLinear(hidden_dims[0]),
-                        nn.ReLU(),
-                        nn.Dropout(dropout),
-                        nn.Linear(hidden_dims[0], hidden_dims[1]),
-                        nn.ReLU(),
-                        nn.Dropout(dropout),
-                        nn.Linear(hidden_dims[1], 1),
-                    )
-
-                def forward(self, x):
-                    return self.net(x.float())
-
-            hidden_str = os.getenv("MODEL_MLP_HIDDEN", "128,64")
-            try:
-                hidden_dims = tuple(int(h) for h in hidden_str.split(",") if h)
-            except Exception:
-                hidden_dims = (128, 64)
-            dropout = float(os.getenv("MODEL_MLP_DROPOUT", "0.1"))
-            max_epochs = int(os.getenv("MODEL_MLP_MAX_EPOCHS", "20"))
-            lr = float(os.getenv("MODEL_MLP_LR", "0.001"))
-
-            clf = NeuralNetBinaryClassifier(
-                module=MLP,
-                module__hidden_dims=hidden_dims,
-                module__dropout=dropout,
-                criterion=nn.BCEWithLogitsLoss,
-                optimizer=torch.optim.Adam,
-                lr=lr,
-                max_epochs=max_epochs,
-                train_split=None,
-                iterator_train__shuffle=True,
-                verbose=0,
-                device="cpu",
-            )
+            hidden_dims = tuple(int(h) for h in hidden_str.split(",") if h)
         except Exception:
-            clf = LogisticRegression(max_iter=200, class_weight="balanced")
+            hidden_dims = (128, 64)
+        dropout = float(os.getenv("MODEL_MLP_DROPOUT", "0.1"))
+        max_epochs = int(os.getenv("MODEL_MLP_MAX_EPOCHS", "20"))
+        lr = float(os.getenv("MODEL_MLP_LR", "0.001"))
+
+        clf = NeuralNetBinaryClassifier(
+            module=TorchMLP,
+            module__hidden_dims=hidden_dims,
+            module__dropout=dropout,
+            criterion=nn.BCEWithLogitsLoss,
+            optimizer=torch.optim.Adam,
+            lr=lr,
+            max_epochs=max_epochs,
+            train_split=None,
+            iterator_train__shuffle=True,
+            verbose=0,
+            device="cpu",
+        )
     else:
         clf = LogisticRegression(max_iter=200, class_weight="balanced")
 
