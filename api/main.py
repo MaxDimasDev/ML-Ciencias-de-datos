@@ -86,21 +86,49 @@ def on_startup():
                 base_df = collect_training_data()
             except Exception:
                 base_df = load_default_dataset()
+            try:
+                _ss = int(os.getenv("STARTUP_SAMPLE_SIZE", "2000"))
+            except Exception:
+                _ss = 2000
+            if _ss > 0 and len(base_df) > _ss:
+                base_df = base_df.sample(n=_ss, random_state=42)
             pipe, metrics, _schema = train_and_evaluate(base_df)
             version = crud.next_version(db)
             artifact = dump_artifact(pipe)
             crud.create_model_version(db, version=version, artifact=artifact, metrics=metrics)
 
         try:
+            enable_mlp = os.getenv("ENABLE_MLP_STARTUP", "false").lower() in {"1", "true", "yes", "y", "on"}
+            enable_mlp_bg = os.getenv("ENABLE_MLP_STARTUP_BACKGROUND", "false").lower() in {"1", "true", "yes", "y", "on"}
             try:
                 df = collect_training_data()
             except Exception:
                 df = load_default_dataset()
+            try:
+                sample_s = int(os.getenv("STARTUP_SAMPLE_SIZE", "2000"))
+            except Exception:
+                sample_s = 2000
+            if sample_s > 0 and len(df) > sample_s:
+                df = df.sample(n=sample_s, random_state=42)
             pipe_lr, metrics_lr, schema_lr = train_and_evaluate(df, model_type="logreg")
-            pipe_mlp, metrics_mlp, schema_mlp = train_and_evaluate(df, model_type="mlp")
             globals()["PIPE_LOGREG"] = pipe_lr
-            globals()["PIPE_MLP"] = pipe_mlp
-            globals()["SCHEMA_FOR_BOTH"] = schema_lr or schema_mlp
+            globals()["SCHEMA_FOR_BOTH"] = schema_lr
+            if enable_mlp:
+                try:
+                    pipe_mlp, metrics_mlp, schema_mlp = train_and_evaluate(df, model_type="mlp")
+                    globals()["PIPE_MLP"] = pipe_mlp
+                    globals()["SCHEMA_FOR_BOTH"] = globals()["SCHEMA_FOR_BOTH"] or schema_mlp
+                except Exception:
+                    pass
+            elif enable_mlp_bg:
+                import threading
+                def _bg():
+                    try:
+                        pipe_mlp, metrics_mlp, schema_mlp = train_and_evaluate(df, model_type="mlp")
+                        globals()["PIPE_MLP"] = pipe_mlp
+                    except Exception:
+                        pass
+                threading.Thread(target=_bg, daemon=True).start()
         except Exception:
             pass
     finally:
