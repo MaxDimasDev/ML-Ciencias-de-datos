@@ -171,8 +171,17 @@ def on_startup():
                 os.environ["MODEL_MLP_MAX_EPOCHS"] = "1"
                 os.environ["MODEL_MLP_HIDDEN"] = "32,16"
                 try:
-                    pipe_mlp_cs, _, _ = train_and_evaluate(df_cs, model_type="mlp")
+                    pipe_mlp_cs, metrics_mlp_cs, schema_mlp_cs = train_and_evaluate(df_cs, model_type="mlp")
                     globals()["PIPE_MLP"] = pipe_mlp_cs
+                    try:
+                        mcs = dict(metrics_mlp_cs)
+                        mcs["model_type"] = "mlp"
+                        vcs = crud.next_version(db)
+                        acs = dump_artifact(pipe_mlp_cs)
+                        crud.create_model_version(db, version=vcs, artifact=acs, metrics=mcs)
+                        globals()["SCHEMA_FOR_BOTH"] = globals()["SCHEMA_FOR_BOTH"] or schema_mlp_cs
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 finally:
