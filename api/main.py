@@ -118,6 +118,12 @@ def on_startup():
             if _ss > 0 and len(base_df) > _ss:
                 base_df = base_df.sample(n=_ss, random_state=42)
             pipe, metrics, _schema = train_and_evaluate(base_df)
+            try:
+                m = dict(metrics)
+                m["model_type"] = "logreg"
+                metrics = m
+            except Exception:
+                pass
             version = crud.next_version(db)
             artifact = dump_artifact(pipe)
             crud.create_model_version(db, version=version, artifact=artifact, metrics=metrics)
@@ -378,10 +384,46 @@ def _retrain_from_feedback_background(model_type: str = "logreg"):
             except Exception:
                 raise
         labeled = crud.get_all_labeled_examples(db)
+        try:
+            max_fb = int(os.getenv("RETRAIN_FEEDBACK_MAX", "2000"))
+        except Exception:
+            max_fb = 2000
+        if max_fb > 0 and len(labeled) > max_fb:
+            labeled = labeled[-max_fb:]
         labeled_dicts = [{"features": r.features, "y": r.y} for r in labeled]
         add_df = _labeled_examples_to_df(labeled_dicts)
 
-        pipe, metrics, _schema = train_and_evaluate(base_df, additional_df=add_df if not add_df.empty else None, model_type=model_type)
+        mt = (model_type or "logreg").lower()
+        prev_svd = os.getenv("MODEL_MLP_SVD_COMPONENTS")
+        prev_ep = os.getenv("MODEL_MLP_MAX_EPOCHS")
+        prev_hid = os.getenv("MODEL_MLP_HIDDEN")
+        try:
+            if mt in {"mlp", "torch", "pytorch"}:
+                try:
+                    rs = int(os.getenv("RETRAIN_SAMPLE_SIZE", "1500"))
+                except Exception:
+                    rs = 1500
+                if rs > 0 and len(base_df) > rs:
+                    base_df = base_df.sample(n=rs, random_state=42)
+                os.environ["MODEL_MLP_SVD_COMPONENTS"] = os.getenv("RETRAIN_MLP_SVD_COMPONENTS", os.getenv("MODEL_MLP_SVD_COMPONENTS", "32"))
+                os.environ["MODEL_MLP_MAX_EPOCHS"] = os.getenv("RETRAIN_MLP_MAX_EPOCHS", os.getenv("MODEL_MLP_MAX_EPOCHS", "2"))
+                os.environ["MODEL_MLP_HIDDEN"] = os.getenv("RETRAIN_MLP_HIDDEN", os.getenv("MODEL_MLP_HIDDEN", "32,16"))
+
+            pipe, metrics, _schema = train_and_evaluate(base_df, additional_df=add_df if not add_df.empty else None, model_type=model_type)
+        finally:
+            if prev_svd is not None:
+                os.environ["MODEL_MLP_SVD_COMPONENTS"] = prev_svd
+            else:
+                os.environ.pop("MODEL_MLP_SVD_COMPONENTS", None)
+            if prev_ep is not None:
+                os.environ["MODEL_MLP_MAX_EPOCHS"] = prev_ep
+            else:
+                os.environ.pop("MODEL_MLP_MAX_EPOCHS", None)
+            if prev_hid is not None:
+                os.environ["MODEL_MLP_HIDDEN"] = prev_hid
+            else:
+                os.environ.pop("MODEL_MLP_HIDDEN", None)
+
         metrics = dict(metrics)
         metrics["model_type"] = model_type
         version = crud.next_version(db)
